@@ -1,0 +1,518 @@
+<title>Penn-One Dispatch Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&family=Overpass+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: dispatcher's desk. Clock + transport on top; map (with buildings) beside the optimizer's live pipeline and decision log; fleet schedule lanes across the bottom. */
+:root {
+  --bg: #e9edf1; --panel: #f7f9fb; --map: #e1e6eb; --line: #d2d9e0;
+  --street: #c8d0d8; --street-major: #a9b3be;
+  --ink: #16202a; --muted: #566372; --faint: #8b97a4;
+  --ev: #0d8576; --gas: #b86e0c; --on-ev: #ffffff; --on-gas: #ffffff;
+  --rider: #7637b5; --late: #c42f28; --bus: #2b59c9; --approved: #3d8f5a;
+  --pick: #c2410c; --focus: #2b59c9;
+  --f-display: "Overpass", "Arial Narrow", system-ui, sans-serif;
+  --f-mono: "Overpass Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1319; --panel: #141b23; --map: #111820; --line: #24303c;
+    --street: #232e3a; --street-major: #33424f;
+    --ink: #e4eaf0; --muted: #96a3b0; --faint: #66727f;
+    --ev: #35c2ae; --gas: #eea43a; --on-ev: #062521; --on-gas: #2a1800;
+    --rider: #b78cf2; --late: #f2665b; --bus: #7097f6; --approved: #6cc68a;
+    --pick: #fb8a4c; --focus: #7097f6; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1319; --panel: #141b23; --map: #111820; --line: #24303c;
+  --street: #232e3a; --street-major: #33424f;
+  --ink: #e4eaf0; --muted: #96a3b0; --faint: #66727f;
+  --ev: #35c2ae; --gas: #eea43a; --on-ev: #062521; --on-gas: #2a1800;
+  --rider: #b78cf2; --late: #f2665b; --bus: #7097f6; --approved: #6cc68a;
+  --pick: #fb8a4c; --focus: #7097f6; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-display); font-size: 14px; line-height: 1.45; }
+.wrap { max-width: 1400px; margin: 0 auto; padding-block: 18px 36px; padding-inline: 20px; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 24px; }
+.eyebrow, .label { font-family: var(--f-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { margin: 2px 0 4px; font-weight: 800; font-size: clamp(24px, 3.6vw, 34px); line-height: 1.05; text-wrap: balance; }
+h2 { margin: 0; font-size: 15px; font-weight: 800; }
+.sub { color: var(--muted); max-width: 75ch; }
+.clock { font-family: var(--f-mono); font-weight: 600; font-size: clamp(28px, 4.6vw, 42px); line-height: 1; font-variant-numeric: tabular-nums; text-align: right; }
+.clock small { display: block; font-size: 11px; font-weight: 400; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; margin-top: 6px; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.card > .hd { padding: 11px 14px 9px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; border-bottom: 1px solid var(--line); }
+.hd .label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+.controls { padding: 10px 14px; display: grid; grid-template-columns: auto auto 1fr; gap: 10px 16px; align-items: center; }
+button { font: 600 13px/1 var(--f-display); color: var(--ink); }
+#play { width: 42px; height: 42px; border-radius: 50%; border: 0; background: var(--ink); color: var(--panel); cursor: pointer; display: grid; place-items: center; }
+#play svg { width: 16px; height: 16px; fill: currentColor; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { padding: 9px 10px; cursor: pointer; font-family: var(--f-mono); font-size: 12px; white-space: nowrap; }
+.seg input:checked + label { background: var(--ink); color: var(--panel); }
+.seg input:focus-visible + label, button:focus-visible, input[type=range]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+#scrub { width: 100%; accent-color: var(--ink); margin: 0; }
+.ticks { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 11px; color: var(--muted); }
+
+.kpis { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.kpi { padding: 10px 12px; border-left: 1px solid var(--line); min-width: 0; }
+.kpi:first-child { border-left: 0; }
+.kpi b { display: block; font-family: var(--f-mono); font-weight: 600; font-size: 19px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kpi span { font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+
+.main { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 14px; align-items: start; }
+.mapbox { position: relative; width: 100%; aspect-ratio: 1.3; max-width: 100%; background: var(--map); }
+.mapbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+.bchips { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.bchips button { border: 1px solid var(--line); background: transparent; border-radius: 999px; padding: 6px 10px; font-weight: 400; font-size: 12px; cursor: pointer; }
+.bchips button[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.binfo { padding: 12px 14px 14px; border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 18px; }
+.binfo h3 { grid-column: 1 / -1; margin: 0; font-size: 17px; font-weight: 800; }
+.binfo .v { font-family: var(--f-mono); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.binfo p { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; }
+
+.pipe { list-style: none; margin: 0; padding: 6px 14px 12px; display: grid; gap: 0; counter-reset: step; }
+.pipe li { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+.pipe li:last-child { border-bottom: 0; }
+.pipe li::before { counter-increment: step; content: counter(step); width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--ink); display: grid; place-items: center; font: 600 11px/1 var(--f-mono); }
+.pipe .t { font-weight: 600; }
+.pipe .d { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.bars { display: grid; gap: 3px; margin-top: 6px; }
+.bar { display: grid; grid-template-columns: 26px minmax(0, 1fr) 54px; gap: 8px; align-items: center; font: 12px/1 var(--f-mono); font-variant-numeric: tabular-nums; }
+.bar i { height: 8px; border-radius: 2px; background: var(--faint); display: block; }
+.bar.keep i { background: var(--ink); }
+.bar.win b { color: var(--pick); }
+.bar span { text-align: right; color: var(--muted); }
+
+.feed { list-style: none; margin: 0; padding: 0; max-height: 290px; overflow: auto; border-top: 1px solid var(--line); }
+.feed li { padding: 8px 14px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; gap: 4px 10px; font-size: 12.5px; }
+.feed li:first-child { background: color-mix(in srgb, var(--pick) 9%, transparent); }
+.feed time { font-family: var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.feed .r { min-width: 0; overflow-wrap: anywhere; }
+.feed .r small { display: block; color: var(--muted); }
+.pill { font: 600 10.5px/1 var(--f-mono); padding: 4px 6px; border-radius: 4px; border: 1px solid currentColor; white-space: nowrap; align-self: start; }
+.pill.walk { color: var(--approved); } .pill.bus { color: var(--bus); } .pill.door { color: var(--muted); } .pill.q { color: var(--late); }
+
+.fleet .rows { display: grid; }
+.lane { display: grid; grid-template-columns: 230px minmax(0, 1fr); border-top: 1px solid var(--line); }
+.lane:first-child { border-top: 0; }
+.vinfo { padding: 8px 12px 8px 14px; display: grid; gap: 4px; border-right: 1px solid var(--line); min-width: 0; }
+.vinfo .top { display: flex; align-items: baseline; gap: 8px; }
+.vinfo .id { font: 600 16px/1 var(--f-mono); }
+.vinfo .ty { font-size: 12px; color: var(--muted); }
+.seats { display: flex; gap: 2px; }
+.seats i { width: 10px; height: 10px; border-radius: 2px; border: 1.5px solid var(--faint); }
+.seats i.on { background: var(--ink); border-color: var(--ink); }
+.soc { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 6px; align-items: center; font: 11px/1 var(--f-mono); color: var(--muted); }
+.soc div { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.soc div i { display: block; height: 100%; background: var(--ev); }
+.vinfo .st { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gwrap { position: relative; min-width: 0; }
+.gwrap canvas { display: block; width: 100%; height: 100%; position: absolute; inset: 0; }
+.gaxis { display: grid; grid-template-columns: 230px minmax(0, 1fr); border-bottom: 1px solid var(--line); }
+.gaxis canvas { display: block; width: 100%; height: 22px; }
+.fleet .note { padding: 8px 14px 12px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.fleet .note b { color: var(--ink); font-weight: 600; }
+
+footer { font-size: 12.5px; color: var(--muted); max-width: 100ch; display: grid; gap: 6px; }
+footer p { margin: 0; }
+
+@media (max-width: 1050px) { .main { grid-template-columns: 1fr; } .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } .kpi:nth-child(5) { border-left: 0; } .kpi:nth-child(n+5) { border-top: 1px solid var(--line); } }
+@media (max-width: 640px) {
+  .wrap { padding-inline: 16px; }
+  .controls { grid-template-columns: auto 1fr; }
+  .controls .tl { grid-column: 1 / -1; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kpi:nth-child(odd) { border-left: 0; } .kpi:nth-child(n+3) { border-top: 1px solid var(--line); }
+  .binfo { grid-template-columns: 1fr; }
+  .lane, .gaxis { grid-template-columns: 132px minmax(0, 1fr); }
+  .vinfo .ty, .vinfo .st { display: none; }
+  .clock { text-align: left; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">Penn-One · Shadow-pilot dispatch</div>
+      <h1>Dispatch Console</h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <div class="clock"><span id="clock">6:00 PM</span><small id="clockday">evening service</small></div>
+  </header>
+
+  <div class="card controls">
+    <button id="play" aria-label="Pause"><svg viewBox="0 0 20 20" id="playicon"></svg></button>
+    <div class="seg" role="radiogroup" aria-label="Playback speed">
+      <input type="radio" name="speed" id="sp1" value="20"><label for="sp1">20×</label>
+      <input type="radio" name="speed" id="sp2" value="60" checked><label for="sp2">1 min/s</label>
+      <input type="radio" name="speed" id="sp3" value="300"><label for="sp3">5 min/s</label>
+    </div>
+    <div class="tl">
+      <input type="range" id="scrub" aria-label="Time of evening" step="30">
+      <div class="ticks" id="ticks"></div>
+    </div>
+  </div>
+
+  <div class="card kpis" id="kpis"></div>
+
+  <div class="main">
+    <section class="card">
+      <div class="hd"><h2>Live map</h2><span class="label">Buildings labeled · green squares are approved walk-to points, larger ones see more historical pickups</span></div>
+      <div class="mapbox"><canvas id="mapbase"></canvas><canvas id="map" role="img" aria-label="Map of University City with vans, riders and labeled buildings"></canvas></div>
+      <div class="bchips" id="bchips" role="group" aria-label="Pick a building"></div>
+      <div class="binfo" id="binfo" aria-live="polite"></div>
+    </section>
+
+    <section class="card">
+      <div class="hd"><h2>Optimizer</h2><span class="label" id="cycle">dispatch cycle every 30 s</span></div>
+      <ol class="pipe" id="pipe"></ol>
+      <div class="hd" style="border-top:1px solid var(--line)"><h2>Decision log</h2><span class="label" id="feedcount"></span></div>
+      <ul class="feed" id="feed"></ul>
+    </section>
+  </div>
+
+  <section class="card fleet">
+    <div class="hd"><h2>Fleet schedule</h2><span class="label">Planned stops for the next 45 minutes, re-planned on every assignment · shaded height = seats in use</span></div>
+    <div class="gaxis"><div></div><canvas id="axis"></canvas></div>
+    <div class="rows" id="lanes"></div>
+    <div class="note" id="fleetnote"></div>
+  </section>
+
+  <footer>
+    <p><strong>How the optimizer works.</strong> Every 30 seconds each waiting request goes through the five steps above. All distances follow physical routes. Walking is the shortest path over OpenStreetMap sidewalks, footpaths, crosswalks and steps, so a 2-minute limit (about 156 m at 1.3 m/s) never cuts through a building, the rail yards or the river. Van screening and insertion use OSRM drive times over the real road network, one-way streets included. Walk-to points are ranked by how many pickups happened near them over 30 past evenings. The screen keeps the 4 vans with the shortest road ETA for the full insertion search.</p>
+    <p>Demand is synthetic: 300 requests on one generated evening, with history built from 30 more. Fleet: 5 electric vans with 6 seats and 1 gas van with 8 seats. Drive times come from OSRM, map data © OpenStreetMap contributors, and building positions are approximate. Vans, buses and walking riders are drawn along their actual street and sidewalk routes.</p>
+  </footer>
+</div>
+
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+(() => {
+const D = JSON.parse(document.getElementById('data').textContent);
+const [S0, W0] = D.bbox;
+const VIEW = { S: 39.9405, N: 39.9625, W: -75.2165, E: -75.1775 };
+const COS = Math.cos(39.95 * Math.PI / 180);
+const VWU = (VIEW.E - VIEW.W) * 1e5 * COS, VHU = (VIEW.N - VIEW.S) * 1e5;
+const NODES = D.nodes, T0 = D.start, T1 = D.end;
+
+const PATHS = (D.paths || []).map(fl => { const pts = []; for (let i = 0; i < fl.length; i += 2) pts.push([fl[i], fl[i + 1]]);
+  const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot((pts[i][0] - pts[i - 1][0]) * COS, pts[i][1] - pts[i - 1][1]));
+  return { pts, cum, len: cum.at(-1) }; });
+// position a fraction f of the way along a routed street/sidewalk path
+function along(pi, f) { const P = PATHS[pi]; if (!P) return [0, 0]; if (P.pts.length < 2 || !P.len) return P.pts[0];
+  const d = Math.max(0, Math.min(1, f)) * P.len; let i = 1; while (i < P.cum.length - 1 && P.cum[i] < d) i++;
+  const s = (d - P.cum[i - 1]) / Math.max(1e-9, P.cum[i] - P.cum[i - 1]);
+  return [P.pts[i - 1][0] + (P.pts[i][0] - P.pts[i - 1][0]) * s, P.pts[i - 1][1] + (P.pts[i][1] - P.pts[i - 1][1]) * s]; }
+function strokePartial(c, xy, pi, f) { const P = PATHS[pi]; if (!P) return; const d = Math.min(1, f) * P.len;
+  c.beginPath(); let [x, y] = xy(P.pts[0]); c.moveTo(x, y);
+  for (let i = 1; i < P.pts.length; i++) { if (P.cum[i] > d) { [x, y] = xy(along(pi, f)); c.lineTo(x, y); break; } [x, y] = xy(P.pts[i]); c.lineTo(x, y); }
+  c.stroke(); }
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const ABBR = { 'Van Pelt Library': 'VAN PELT', 'Huntsman Hall': 'HUNTSMAN', 'Towne / Levine (Engineering)': 'ENGINEERING',
+  'Houston Hall': 'HOUSTON', 'Irvine Auditorium': 'IRVINE', 'Penn Museum': 'MUSEUM', 'HUP / Perelman': 'HUP',
+  'The Quad': 'QUAD', 'Harnwell College House': 'HARNWELL', 'Gutmann College House': 'GUTMANN',
+  'Hill College House': 'HILL', '30th St Station': '30TH ST', 'Pennovation Center': 'PENNOVATION', 'Clark Park': 'CLARK PK' };
+
+let C = {};
+function readColors() { const cs = getComputedStyle(document.documentElement);
+  for (const k of ['map','street','street-major','ink','muted','faint','ev','gas','on-ev','on-gas','rider','late','bus','approved','panel','pick','line'])
+    C[k] = cs.getPropertyValue('--' + k).trim();
+  C.fd = cs.getPropertyValue('--f-display'); C.fm = cs.getPropertyValue('--f-mono'); }
+
+const fmt = s => { s = Math.round(s); const h = Math.floor(s / 3600) % 24, m = Math.floor(s % 3600 / 60);
+  return `${(h % 12) || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+const fmtS = s => { s = Math.round(s); const h = Math.floor(s / 3600) % 24, m = Math.floor(s % 3600 / 60), x = s % 60;
+  return `${(h % 12) || 12}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}`; };
+const hourName = h => fmt(h * 3600).replace(':00', '');
+const lerp = (a, b, f) => a + (b - a) * f;
+function bsearch(arr, t, key = x => x) { let lo = 0, hi = arr.length - 1, r = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (key(arr[m]) <= t) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---- data prep --------------------------------------------------------------
+const riders = D.riders.map(r => ({ treq: r[0], o: r[1], pu: r[2], d: r[3], put: r[4], dot: r[5], mode: r[6],
+  status: r[7], pax: r[8], walk: r[9], earliest: r[10], rid: r[11], wpath: r[12] }));
+const byRid = new Map(riders.map(r => [r.rid, r]));
+const vans = D.vans.map(v => { const t0s = v.legs.map(L => L[0]), cum = [0], dead = [0];
+  for (const L of v.legs) { cum.push(cum.at(-1) + L[5]); dead.push(dead.at(-1) + (L[4] === 0 ? L[5] : 0)); }
+  return { ...v, t0s, cum, dead, snaps: D.snapshots.filter(s => s[1] === v.label) }; });
+const bnodes = D.buildings.map(b => b.node);
+function placeOf(n) { let best = null, bd = 1e9;
+  D.buildings.forEach(b => { const p = NODES[b.node], q = NODES[n]; const d = Math.abs(p[0] - q[0]) * COS + Math.abs(p[1] - q[1]); if (d < bd) { bd = d; best = b.name; } });
+  if (bd < 220) return best; return D.names[n] || (bd < 600 ? 'near ' + best : 'University City'); }
+
+function vanState(v, t) {
+  const i = bsearch(v.t0s, t);
+  if (i < 0) return { p: NODES[D.depot], load: 0, moving: false, node: D.depot, soc: v.ev ? D.battery_kwh * 0.95 : null };
+  const L = v.legs[i], prevSoc = i > 0 ? v.legs[i - 1][6] : D.battery_kwh * 0.95;
+  let soc = v.ev ? L[6] : null;
+  const ch = v.charges.find(([a, b]) => t >= a && t < b);
+  if (ch && v.ev) { const nxt = v.legs[i + 1]; const tgt = nxt ? nxt[6] + 0 : L[6]; soc = lerp(L[6], Math.max(L[6], 0.85 * D.battery_kwh), (t - ch[0]) / (ch[1] - ch[0])); }
+  if (t < L[1]) { const f = (t - L[0]) / (L[1] - L[0]);
+    if (v.ev) soc = lerp(prevSoc, L[6], f);
+    return { p: along(L[7], f), path: L[7], f, load: L[4], moving: true, node: L[3], soc, charging: !!ch }; }
+  const nx = v.legs[i + 1];
+  return { p: NODES[L[3]], load: nx ? nx[4] : 0, moving: false, node: L[3], soc, charging: !!ch, chargeEnd: ch && ch[1] };
+}
+
+// ---- KPIs ---------------------------------------------------------------------
+const KP = [['req', 'Requests so far'], ['wait', 'Waiting now'], ['avg', 'Avg wait, min'], ['mi', 'Van miles'],
+  ['dead', 'Driven empty'], ['walk', 'Walk-to pickups'], ['bus', 'Bus handoffs']];
+document.getElementById('kpis').innerHTML = KP.map(([k, l]) => `<div class="kpi"><b id="k-${k}">0</b><span>${l}</span></div>`).join('');
+function kpis(t) {
+  let req = 0, waiting = 0, ws = 0, wn = 0, walk = 0, bus = 0;
+  for (const r of riders) { if (r.treq > t) continue; req++;
+    if (r.put != null && r.put <= t) { ws += r.put - r.earliest; wn++; if (r.mode === 'walk+van') walk++; if (r.mode.includes('bus')) bus++; }
+    else if (r.status !== 'unserved' || t < r.treq + 1800) waiting++; }
+  let mi = 0, dm = 0;
+  for (const v of vans) { const i = bsearch(v.t0s, t); if (i < 0) continue; const L = v.legs[i];
+    const f = L[1] > L[0] ? Math.min(1, (t - L[0]) / (L[1] - L[0])) : 1; mi += v.cum[i] + L[5] * f; dm += v.dead[i] + (L[4] === 0 ? L[5] * f : 0); }
+  const set = (k, v) => document.getElementById('k-' + k).textContent = v;
+  set('req', req); set('wait', waiting); set('avg', wn ? (ws / wn / 60).toFixed(1) : '0.0');
+  set('mi', mi.toFixed(0)); set('dead', mi ? (100 * dm / mi).toFixed(0) + '%' : '0%'); set('walk', walk); set('bus', bus);
+}
+const K = D.kpis.all_levers || Object.values(D.kpis).at(-1), KB = D.kpis.baseline;
+document.getElementById('sub').textContent =
+  `Synthetic evening #${D.demand.night} · ${D.demand.requests} requests · 6 vans: E1–E5 electric (6 seats), G1 gas (8 seats) · pooling, walk-to points and bus handoffs all on`;
+
+// ---- map ------------------------------------------------------------------------
+const mapCv = document.getElementById('map'), baseCv = document.getElementById('mapbase');
+const M = {};
+function setup(cv, w, h) { const dpr = devicePixelRatio || 1; cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); return c; }
+const xy = p => [M.ox + ((W0 + p[0] / 1e5) - VIEW.W) * 1e5 * COS * M.sc, M.oy + (VIEW.N - (S0 + p[1] / 1e5)) * 1e5 * M.sc];
+let selected = D.buildings.findIndex(b => b.walk) ;
+if (selected < 0) selected = 0;
+
+function drawBase() {
+  const r = mapCv.parentElement.getBoundingClientRect(); M.w = r.width; M.h = r.height;
+  M.sc = Math.min(M.w / VWU, M.h / VHU); M.ox = (M.w - VWU * M.sc) / 2; M.oy = (M.h - VHU * M.sc) / 2;
+  setup(mapCv, M.w, M.h); const c = setup(baseCv, M.w, M.h);
+  c.fillStyle = C.map; c.fillRect(0, 0, M.w, M.h); c.lineCap = 'round'; c.lineJoin = 'round';
+  for (const rank of [1, 2, 3]) { c.strokeStyle = rank === 1 ? C.street : C['street-major']; c.lineWidth = [0, 0.9, 1.8, 2.8][rank]; c.beginPath();
+    for (const st of D.streets) { if (st[0] !== rank) continue; for (let i = 1; i < st.length; i += 2) { const [x, y] = xy([st[i], st[i + 1]]); i === 1 ? c.moveTo(x, y) : c.lineTo(x, y); } }
+    c.stroke(); }
+  c.strokeStyle = C.bus; c.globalAlpha = 0.3; c.lineWidth = 3; c.setLineDash([6, 5]);
+  for (const R of D.bus) for (const pi of R.paths) strokePartial(c, xy, pi, 1);
+  c.setLineDash([]); c.globalAlpha = 1;
+  const mx = Math.max(...D.approved.map(a => a[1]));
+  c.fillStyle = C.approved;
+  for (const [n, dens] of D.approved) { const [x, y] = xy(NODES[n]); const s = 2.5 + 5 * Math.sqrt(dens / mx); c.globalAlpha = 0.85; c.fillRect(x - s / 2, y - s / 2, s, s); }
+  c.globalAlpha = 1;
+  const [dx, dy] = xy(NODES[D.depot]); c.fillStyle = C.ink; c.fillRect(dx - 5, dy - 5, 10, 10);
+  c.font = `600 11px ${C.fd}`; c.fillText('DEPOT', dx + 8, dy + 4);
+}
+
+function drawBuildings(c) {
+  c.font = `600 ${M.w < 520 ? 9 : 10.5}px ${C.fm}`; c.textBaseline = 'middle';
+  M.hits = [];
+  D.buildings.forEach((b, i) => {
+    const [x, y] = xy(b.p); const t = ABBR[b.name] || b.name; const w = c.measureText(t).width + 10, h = 17;
+    const sel = i === selected;
+    c.fillStyle = sel ? C.ink : C.panel; c.strokeStyle = C.ink; c.lineWidth = 1;
+    c.beginPath(); c.roundRect(x - w / 2, y - h - 6, w, h, 4); c.fill(); c.stroke();
+    c.beginPath(); c.moveTo(x - 4, y - 6); c.lineTo(x + 4, y - 6); c.lineTo(x, y); c.closePath(); c.fill(); c.stroke();
+    c.fillStyle = sel ? C.panel : C.ink; c.fillText(t, x - w / 2 + 5, y - h / 2 - 6 + 0.5);
+    M.hits.push([x - w / 2, y - h - 6, w, h + 6, i]);
+  });
+  c.textBaseline = 'alphabetic';
+}
+
+function drawSelectedWalk(c) {
+  const b = D.buildings[selected]; if (!b || !b.walk) return;
+  const [zx, zy] = xy(NODES[b.walk.node]);
+  c.strokeStyle = C.approved; c.lineWidth = 2.5; c.setLineDash([4, 3]);
+  strokePartial(c, xy, b.walk.path, 1); c.setLineDash([]);
+  c.strokeStyle = C.approved; c.lineWidth = 2; c.beginPath(); c.arc(zx, zy, 7, 0, 7); c.stroke();
+}
+
+function busPositions(t) { const out = [];
+  for (const R of D.bus) for (let dep = R.start; dep <= R.end && dep <= t; dep += R.headway) {
+    const e = t - dep; if (e >= R.loop) continue; let k = R.offset.length - 1; while (k > 0 && R.offset[k] > e) k--;
+    const end = k + 1 < R.offset.length ? R.offset[k + 1] : R.loop;
+    const f = Math.min(1, (e - R.offset[k]) / Math.max(1, end - R.offset[k])); out.push(along(R.paths[k], f)); }
+  return out; }
+
+function latestDecision(t) { const i = bsearch(D.decisions, t, d => d.t); return i < 0 ? null : D.decisions[i]; }
+
+function drawMap(t) {
+  const c = mapCv.getContext('2d'); c.clearRect(0, 0, M.w, M.h); c.drawImage(baseCv, 0, 0, M.w, M.h);
+  const r = Math.max(5, Math.min(8.5, M.w / 95));
+  drawSelectedWalk(c);
+  c.fillStyle = C.bus; for (const p of busPositions(t)) { const [x, y] = xy(p); c.fillRect(x - r * .9, y - r * .6, r * 1.8, r * 1.2); }
+  for (const R of riders) {
+    if (R.treq > t || (R.put != null && R.put <= t)) continue;
+    if (R.status === 'unserved' && t > R.treq + 1800) continue;
+    if (R.mode === 'bus+van' && t < R.earliest) continue;
+    let p = NODES[R.pu];
+    if (R.mode === 'walk+van' && t < R.earliest && R.wpath >= 0) {
+      const f = (t - R.treq) / Math.max(1, R.earliest - R.treq);
+      p = along(R.wpath, f);
+      c.strokeStyle = C.rider; c.lineWidth = 1.2; c.setLineDash([2, 2]); strokePartial(c, xy, R.wpath, 1); c.setLineDash([]);
+    }
+    const [x, y] = xy(p); c.fillStyle = t - R.earliest > 900 ? C.late : C.rider; c.beginPath(); c.arc(x, y, 3, 0, 7); c.fill();
+  }
+  // latest decision: link chosen van to its pickup
+  const d = latestDecision(t);
+  if (d && d.result === 'assigned' && t - d.t < 150) {
+    const v = vans.find(v => v.label === d.vid), st = vanState(v, t); const rr = byRid.get(d.rid);
+    if (rr) { const [px, py] = xy(NODES[rr.pu]), [vx, vy] = xy(st.p);
+      c.strokeStyle = C.pick; c.lineWidth = 2;
+      c.beginPath(); c.arc(px, py, 9 + 3 * Math.sin(t / 8), 0, 7); c.stroke();
+      c.beginPath(); c.arc(vx, vy, 16, 0, 7); c.stroke(); }
+  }
+  c.font = `600 ${Math.round(r * 1.05)}px ${C.fm}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+  for (const v of vans) {
+    const st = vanState(v, t), [x, y] = xy(st.p), col = v.ev ? C.ev : C.gas;
+    if (st.moving) { c.strokeStyle = col; c.globalAlpha = .35; c.lineWidth = 2; strokePartial(c, xy, st.path, st.f); c.globalAlpha = 1; }
+    const w = r * 3.1, h = r * 1.9;
+    c.beginPath(); c.roundRect(x - w / 2, y - h / 2, w, h, 4);
+    if (st.load > 0) { c.fillStyle = col; c.fill(); c.fillStyle = v.ev ? C['on-ev'] : C['on-gas']; }
+    else { c.fillStyle = C.panel; c.fill(); c.strokeStyle = col; c.lineWidth = 2; c.stroke(); c.fillStyle = col; }
+    c.fillText(v.label, x, y + 0.5);
+    if (st.charging) { c.strokeStyle = C.ev; c.setLineDash([2, 2]); c.lineWidth = 1.5; c.beginPath(); c.roundRect(x - w / 2 - 4, y - h / 2 - 4, w + 8, h + 8, 6); c.stroke(); c.setLineDash([]); }
+  }
+  c.textAlign = 'start'; c.textBaseline = 'alphabetic';
+  drawBuildings(c);
+}
+mapCv.addEventListener('click', e => { const r = mapCv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  const h = (M.hits || []).find(([hx, hy, w, hh]) => x >= hx && x <= hx + w && y >= hy && y <= hy + hh); if (h) selectB(h[4]); });
+
+// ---- building chips + info ----------------------------------------------------
+const bchips = document.getElementById('bchips');
+bchips.innerHTML = D.buildings.map((b, i) => `<button type="button" data-i="${i}" aria-pressed="false">${esc(b.name)}</button>`).join('');
+bchips.onclick = e => { const b = e.target.closest('button'); if (b) selectB(+b.dataset.i); };
+function selectB(i) { selected = i; bchips.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', +b.dataset.i === i));
+  renderInfo(); if (M.w) render(true); }
+function renderInfo() {
+  const b = D.buildings[selected], w = b.walk;
+  const walkHtml = w ? `<div><div class="label">Best walk-to point</div><div class="v">${(w.walk_s / 60).toFixed(1)} min · ${w.walk_m} m</div>
+      <p>${esc(w.street)}. ${w.walk_m} m along sidewalks and crossings versus ${w.straight_m} m in a straight line. ${w.pickups} historical pickups per evening there, ranked #1 of ${b.n_cands} approved points within 2 min.</p></div>`
+    : `<div><div class="label">Best walk-to point</div><div class="v">Door pickup</div><p>No approved, well-lit pickup point is within a 2-minute walk on real sidewalks, so riders here are always picked up at the door.</p></div>`;
+  document.getElementById('binfo').innerHTML = `<h3>${esc(b.name)}</h3>
+    <div><div class="label">Historical demand</div><div class="v">${b.hist_pickups} pickups / evening</div><p>Within a 150 m walk, averaged over 30 past evenings. Busiest hour starts at ${hourName(b.peak_hour)}.</p></div>
+    ${walkHtml}
+    <div><div class="label">Tonight</div><div class="v">${b.tonight} requests${b.tonight_wait != null ? ` · ${b.tonight_wait} min` : ''}</div><p>Requests starting within 150 m of here this evening${b.tonight_wait != null ? ', with their average wait for a van' : ''}.</p></div>`;
+}
+
+// ---- optimizer pipeline + feed -----------------------------------------------
+const pipe = document.getElementById('pipe'), feed = document.getElementById('feed');
+let lastDecIdx = -2;
+function pillFor(d) { if (d.result !== 'assigned') return '<span class="pill q">queued</span>';
+  if (d.mode === 'walk+van') return '<span class="pill walk">walk-to</span>';
+  if (d.mode.includes('bus')) return `<span class="pill bus">${d.mode}</span>`; return '<span class="pill door">door</span>'; }
+function renderPipeline(t) {
+  const i = bsearch(D.decisions, t, d => d.t); if (i === lastDecIdx) return; lastDecIdx = i;
+  document.getElementById('feedcount').textContent = `${i + 1} decisions so far`;
+  if (i < 0) { pipe.innerHTML = '<li><div><div class="t">Waiting for the first request</div><div class="d">Service starts at 6:00 PM.</div></div></li>'; feed.innerHTML = ''; return; }
+  const d = D.decisions[i], P = D.policy;
+  const cands = d.options - 1;
+  const walkLine = d.walk ? `Rider opted in. Tried ${cands} approved point${cands === 1 ? '' : 's'} within ${P.walk_max_s / 60} min, ranked by historical pickups. Chose rank #${d.walk_rank}: ${esc(d.walk_to)}, ${d.walk_m} m on foot (${(d.walk / 60).toFixed(1)} min).`
+    : d.mode.includes('bus') ? `Handoff planned: ${d.mode === 'bus+van' ? 'bus first, then a van for the last leg' : 'van to the bus stop, then the bus'}. Walk-to points are not used with bus trips.`
+    : cands > 0 ? `Tried ${cands} history-ranked point${cands === 1 ? '' : 's'}. A door pickup still cost less, so the rider stays at the door.`
+    : 'Door pickup. The rider did not opt in, needs accessible service, or has no approved point within 2 min.';
+  const maxEta = Math.max(...d.screened.map(s => s[1]), 1);
+  const bars = d.screened.map(([lab, eta], k) => `<div class="bar ${k < P.screen_k ? 'keep' : ''} ${lab === d.vid ? 'win' : ''}"><b>${lab}</b><i style="width:${Math.max(4, 100 * eta / maxEta)}%"></i><span>${(eta / 60).toFixed(1)} min</span></div>`).join('');
+  const costs = d.costs.map(([lab, c]) => `${lab} ${(c / 60).toFixed(1)}`).join(' · ');
+  pipe.innerHTML = `
+    <li><div><div class="t">Request #${d.rid} at ${fmtS(d.t)}</div><div class="d">${esc(d.from)} → ${esc(d.to)} · ${d.pax} rider${d.pax > 1 ? 's' : ''}</div></div></li>
+    <li><div><div class="t">Walk-to point</div><div class="d">${walkLine}</div></div></li>
+    <li><div><div class="t">Road-ETA screen · kept ${Math.min(P.screen_k, d.screened.length)} of ${d.screened.length} vans</div><div class="d">Vans ranked by OSRM drive time over the real road network to the pickup, plus time to finish their current stop.</div><div class="bars">${bars}</div></div></li>
+    <li><div><div class="t">Exact insertion · ${d.positions} positions tested</div><div class="d">Every pickup/drop-off slot in each kept van's route, checked against OSRM drive times, seat count, ride-time caps, the ${P.pickup_slip_s / 60}-min pickup guarantee for riders already booked, and EV range. Best costs (min): ${costs || 'none feasible'}.</div></div></li>
+    <li><div><div class="t">${d.result === 'assigned' ? `Assigned to ${d.vid}` : 'No feasible van, so the request stays queued'}</div><div class="d">${d.result === 'assigned' ? `Pickup quoted for ${fmt(d.promised)}. Guaranteed no later than ${fmt(d.promised + P.pickup_slip_s)}.` : 'The request is retried every 30 s until a van can reach it within 30 min.'}</div></div></li>`;
+  const from = Math.max(0, i - 24);
+  feed.innerHTML = D.decisions.slice(from, i + 1).reverse().map(d => `<li><time>${fmt(d.t).replace(' ', '')}</time>
+    <div class="r">#${d.rid} ${esc(d.from)} → ${esc(d.to)}<small>${d.result === 'assigned' ? `${d.vid} · pickup ${fmt(d.promised)}` : 'retrying'}${d.walk ? ` · walks ${d.walk_m} m` : ''}</small></div>${pillFor(d)}</li>`).join('');
+}
+
+// ---- fleet schedule ----------------------------------------------------------
+const lanesEl = document.getElementById('lanes'), axisCv = document.getElementById('axis');
+const WIN = 45 * 60;
+lanesEl.innerHTML = vans.map(v => `<div class="lane"><div class="vinfo">
+  <div class="top"><span class="id">${v.label}</span><span class="ty">${v.ev ? 'Electric' : 'Gas'} · ${v.cap} seats</span></div>
+  <div class="seats" data-seats>${'<i></i>'.repeat(v.cap)}</div>
+  ${v.ev ? '<div class="soc"><div><i data-soc></i></div><span data-socv></span></div>' : '<div class="soc"><span style="grid-column:1/-1">Gas · no range limit modeled</span></div>'}
+  <div class="st" data-st></div></div><div class="gwrap"><canvas></canvas></div></div>`).join('');
+const laneEls = [...lanesEl.querySelectorAll('.lane')];
+vans.forEach((v, k) => { v.el = laneEls[k]; v.gc = laneEls[k].querySelector('canvas'); });
+
+function planAt(v, t) { const i = bsearch(v.snaps, t, s => s[0]); if (i < 0) return []; return v.snaps[i][2].filter(s => s[3] > t); }
+
+function drawAxis(t) {
+  const w = axisCv.getBoundingClientRect().width; const c = setup(axisCv, w, 22);
+  c.font = `11px ${C.fm}`; c.fillStyle = C.muted; c.textBaseline = 'middle';
+  const step = 900, first = Math.ceil(t / step) * step;
+  for (let s = first; s <= t + WIN; s += step) { const x = (s - t) / WIN * w; c.fillRect(x, 16, 1, 6); const lab = fmt(s).replace(' ', '');
+    const tw = c.measureText(lab).width; if (x + tw / 2 < w && x - tw / 2 > 0) c.fillText(lab, x - tw / 2, 9); }
+  c.fillStyle = C.pick; c.fillRect(0, 0, 2, 22); c.fillText('now', 6, 9);
+}
+function drawLane(v, t) {
+  const box = v.gc.parentElement.getBoundingClientRect(), w = box.width, h = box.height;
+  const c = setup(v.gc, w, h), X = s => (s - t) / WIN * w;
+  c.strokeStyle = C.line; c.lineWidth = 1;
+  for (let s = Math.ceil(t / 900) * 900; s <= t + WIN; s += 900) { c.beginPath(); c.moveTo(X(s) + .5, 0); c.lineTo(X(s) + .5, h); c.stroke(); }
+  for (const [a, b] of v.charges) if (b > t && a < t + WIN) { const x0 = Math.max(0, X(a)), x1 = Math.min(w, X(b));
+    c.fillStyle = C.ev; c.globalAlpha = .18; c.fillRect(x0, 6, x1 - x0, h - 12); c.globalAlpha = 1;
+    c.fillStyle = C.ev; c.font = `600 11px ${C.fm}`; c.fillText('charging', x0 + 6, h / 2 + 4); }
+  const st = vanState(v, t), plan = planAt(v, t);
+  let load = st.load, x = 0; const base = h - 6, top = 10, hh = base - top;
+  const col = v.ev ? C.ev : C.gas;
+  for (const [n, kind, rid, eta] of plan) {
+    const xe = Math.min(w, Math.max(0, X(eta)));
+    if (load > 0) { c.fillStyle = col; c.globalAlpha = .22; const bh = hh * load / v.cap; c.fillRect(x, base - bh, xe - x, bh); c.globalAlpha = 1; }
+    x = xe; const r = byRid.get(rid); load = Math.max(0, load + (kind === 'P' ? 1 : -1) * (r ? r.pax : 1));
+  }
+  if (load > 0 && x < w) { c.fillStyle = col; c.globalAlpha = .22; const bh = hh * load / v.cap; c.fillRect(x, base - bh, w - x, bh); c.globalAlpha = 1; }
+  c.font = `10px ${C.fm}`; c.textAlign = 'center';
+  let lastLabel = -99;
+  for (const [n, kind, rid, eta] of plan) { const xx = X(eta); if (xx > w) break; if (xx < -4) continue;
+    c.beginPath();
+    if (kind === 'P') { c.moveTo(xx, base - 16); c.lineTo(xx - 6, base - 4); c.lineTo(xx + 6, base - 4); c.closePath(); c.fillStyle = C.rider; c.fill(); }
+    else { c.moveTo(xx, base - 4); c.lineTo(xx - 6, base - 16); c.lineTo(xx + 6, base - 16); c.closePath(); c.strokeStyle = C.ink; c.lineWidth = 1.5; c.stroke(); }
+    if (xx - lastLabel > 34) { c.fillStyle = C.muted; c.fillText('#' + rid, xx, top + 2); lastLabel = xx; } }
+  c.textAlign = 'start';
+  c.fillStyle = C.pick; c.fillRect(0, 0, 2, h);
+  // side info
+  const seats = v.el.querySelectorAll('[data-seats] i'); seats.forEach((s, k) => s.classList.toggle('on', k < st.load));
+  if (v.ev) { const pct = Math.round(100 * st.soc / D.battery_kwh); v.el.querySelector('[data-soc]').style.width = pct + '%'; v.el.querySelector('[data-socv]').textContent = pct + '%'; }
+  const nextStop = plan.find(s => s[3] >= t);
+  v.el.querySelector('[data-st]').textContent = st.charging ? `Charging until ${fmt(st.chargeEnd || t)}`
+    : nextStop ? `${nextStop[1] === 'P' ? 'Pickup' : 'Drop-off'} #${nextStop[2]} at ${placeOf(nextStop[0])}` : `Idle near ${placeOf(st.node)}`;
+}
+document.getElementById('fleetnote').innerHTML =
+  `<span>Full evening with the levers: <b>${Math.round(K.vehicle_miles)} van miles</b>, ${K.deadhead_pct.toFixed(0)}% empty, ${K.wait_mean_min.toFixed(1)} min average wait, ${K.served_pct.toFixed(0)}% served</span>` +
+  (KB ? `<span>Without them (one party per van): <b>${Math.round(KB.vehicle_miles)} mi</b>, ${KB.wait_mean_min.toFixed(1)} min wait, ${KB.served_pct.toFixed(0)}% served</span>` : '') +
+  `<span><svg width="12" height="10" aria-hidden="true"><path d="M6 0 L12 10 L0 10Z" fill="var(--rider)"/></svg> pickup &nbsp;<svg width="12" height="10" aria-hidden="true"><path d="M0 0 L12 0 L6 10Z" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg> drop-off</span>`;
+
+// ---- timeline + loop -----------------------------------------------------------
+const scrub = document.getElementById('scrub'); scrub.min = T0; scrub.max = T1;
+document.getElementById('ticks').innerHTML = Array.from({ length: (T1 - T0) / 3600 + 1 }, (_, i) => `<span>${hourName((T0 / 3600 + i) % 24 || 24).replace(' ', '').replace('M', '')}</span>`).join('');
+let t = T0 + 2.75 * 3600, playing = !reduce, speed = 60, last = null, lastUi = 0;
+const playBtn = document.getElementById('play'), icon = document.getElementById('playicon');
+function setIcon() { icon.innerHTML = playing ? '<rect x="4" y="3" width="4" height="14"/><rect x="12" y="3" width="4" height="14"/>' : '<path d="M5 3l12 7-12 7z"/>'; playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play'); }
+playBtn.onclick = () => { if (!playing && t >= T1) t = T0; playing = !playing; last = null; setIcon(); };
+document.querySelectorAll('input[name=speed]').forEach(i => i.onchange = () => { speed = +i.value; });
+scrub.oninput = () => { t = +scrub.value; render(true); };
+
+function render(force) {
+  drawMap(t);
+  const now = performance.now();
+  if (force || now - lastUi > 150) { lastUi = now;
+    document.getElementById('clock').textContent = fmt(t); document.getElementById('clockday').textContent = t >= 86400 ? 'after midnight' : 'evening service';
+    scrub.value = t; kpis(t); renderPipeline(t); drawAxis(t); for (const v of vans) drawLane(v, t); }
+}
+function frame(ts) { if (playing) { if (last != null) t += Math.min(0.1, (ts - last) / 1000) * speed; if (t >= T1) { t = T1; playing = false; setIcon(); } }
+  last = ts; render(false); requestAnimationFrame(frame); }
+function layout() { readColors(); drawBase(); lastDecIdx = -2; render(true); }
+new ResizeObserver(layout).observe(document.querySelector('.wrap'));
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', layout);
+new MutationObserver(layout).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+document.fonts && document.fonts.ready.then(layout);
+selectB(selected); setIcon(); layout(); requestAnimationFrame(frame);
+})();
+</script>

@@ -1,0 +1,423 @@
+<title>Penn-One Evening Replay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&family=Overpass+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: transit-ops console. Shared clock + timeline on top, two synced maps (today vs. levers) below, live KPIs under each map. */
+:root {
+  --bg: #eaeef2; --panel: #f7f9fb; --map: #e2e7ec; --line: #d3dae1;
+  --street: #c9d1d9; --street-major: #aab4bf;
+  --ink: #17202a; --muted: #586574;
+  --ev: #0d8576; --gas: #b86e0c; --on-ev: #ffffff; --on-gas: #ffffff;
+  --rider: #7637b5; --late: #c42f28; --bus: #2b59c9; --approved: #3d8f5a;
+  --focus: #2b59c9;
+  --f-display: "Overpass", "Highway Gothic", "Arial Narrow", system-ui, sans-serif;
+  --f-mono: "Overpass Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1319; --panel: #141b23; --map: #111820; --line: #24303c;
+    --street: #232e3a; --street-major: #33424f;
+    --ink: #e4eaf0; --muted: #93a0ad;
+    --ev: #35c2ae; --gas: #eea43a; --on-ev: #062521; --on-gas: #2a1800;
+    --rider: #b78cf2; --late: #f2665b; --bus: #7097f6; --approved: #6cc68a;
+    --focus: #7097f6; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1319; --panel: #141b23; --map: #111820; --line: #24303c;
+  --street: #232e3a; --street-major: #33424f;
+  --ink: #e4eaf0; --muted: #93a0ad;
+  --ev: #35c2ae; --gas: #eea43a; --on-ev: #062521; --on-gas: #2a1800;
+  --rider: #b78cf2; --late: #f2665b; --bus: #7097f6; --approved: #6cc68a;
+  --focus: #7097f6; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-display); font-size: 15px; line-height: 1.45; }
+.wrap { max-width: 1320px; margin: 0 auto; padding-block: 20px 36px; padding-inline: 20px; display: grid; gap: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 24px; }
+.eyebrow { font-family: var(--f-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { margin: 2px 0 4px; font-weight: 800; font-size: clamp(26px, 4vw, 38px); line-height: 1.05; letter-spacing: -.01em; text-wrap: balance; }
+.sub { color: var(--muted); max-width: 70ch; }
+.clock { font-family: var(--f-mono); font-weight: 600; font-size: clamp(30px, 5vw, 46px); line-height: 1; font-variant-numeric: tabular-nums; }
+.clock small { display: block; font-size: 12px; font-weight: 400; color: var(--muted); letter-spacing: .06em; text-transform: uppercase; margin-top: 6px; text-align: right; }
+
+.controls { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: grid; grid-template-columns: auto auto 1fr; gap: 10px 16px; align-items: center; }
+button, .seg label { font: 600 13px/1 var(--f-display); color: var(--ink); }
+#play { width: 44px; height: 44px; border-radius: 50%; border: 0; background: var(--ink); color: var(--panel); cursor: pointer; display: grid; place-items: center; }
+#play svg { width: 18px; height: 18px; fill: currentColor; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { padding: 9px 11px; cursor: pointer; font-family: var(--f-mono); font-weight: 400; font-size: 12px; white-space: nowrap; }
+.seg input:checked + label { background: var(--ink); color: var(--panel); }
+.seg input:focus-visible + label, button:focus-visible, input[type=range]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.timeline { position: relative; min-width: 0; }
+#hist { display: block; width: 100%; height: 34px; }
+#scrub { width: 100%; margin: 2px 0 0; accent-color: var(--ink); }
+.ticks { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 11px; color: var(--muted); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+
+.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-width: 0; display: grid; align-content: start; }
+.ph { padding: 12px 14px 10px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
+.ph h2 { margin: 0; font-size: 18px; font-weight: 800; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { font-family: var(--f-mono); font-size: 11px; padding: 3px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.chip.on { color: var(--ink); border-color: var(--ink); }
+.mapbox { position: relative; width: 100%; aspect-ratio: 1.667; max-width: 100%; background: var(--map); }
+.mapbox canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid var(--line); }
+.kpi { padding: 10px 12px; border-left: 1px solid var(--line); min-width: 0; }
+.kpi:first-child { border-left: 0; }
+.kpi b { display: block; font-family: var(--f-mono); font-weight: 600; font-size: 20px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kpi span { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.final { padding: 8px 14px 12px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.final strong { color: var(--ink); font-weight: 600; }
+.delta { color: var(--ev); font-weight: 600; }
+footer { font-size: 12.5px; color: var(--muted); max-width: 95ch; }
+
+@media (max-width: 900px) {
+  .panels { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .wrap { padding-inline: 16px; }
+  .controls { grid-template-columns: auto 1fr; }
+  .timeline { grid-column: 1 / -1; }
+  .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .kpi:nth-child(4) { border-left: 0; }
+  .kpi:nth-child(n+4) { border-top: 1px solid var(--line); }
+  .clock small { text-align: left; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">Penn-One · Phase 1 digital twin</div>
+      <h1>Evening Replay</h1>
+      <div class="sub" id="sub"></div>
+    </div>
+    <div class="clock" aria-live="off"><span id="clock">6:00 PM</span><small id="clockday">service day</small></div>
+  </header>
+
+  <div class="controls">
+    <button id="play" aria-label="Pause"><svg viewBox="0 0 20 20" id="playicon"></svg></button>
+    <div class="seg" role="radiogroup" aria-label="Playback speed">
+      <input type="radio" name="speed" id="sp1" value="60"><label for="sp1">1 min/s</label>
+      <input type="radio" name="speed" id="sp5" value="300" checked><label for="sp5">5 min/s</label>
+      <input type="radio" name="speed" id="sp15" value="900"><label for="sp15">15 min/s</label>
+    </div>
+    <div class="timeline">
+      <canvas id="hist" aria-hidden="true"></canvas>
+      <input type="range" id="scrub" aria-label="Time of evening" step="30">
+      <div class="ticks" id="ticks"></div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><i class="sw" style="background:var(--ev)"></i>Electric van</span>
+    <span><i class="sw" style="background:var(--gas)"></i>Gas van</span>
+    <span><i class="sw" style="border:2px solid var(--muted)"></i>Hollow = driving empty</span>
+    <span><i class="sw" style="background:var(--rider);width:8px;height:8px"></i>Rider waiting</span>
+    <span><i class="sw" style="background:var(--late);width:8px;height:8px"></i>Waiting 15+ min</span>
+    <span><i class="sw" style="background:var(--bus);border-radius:2px"></i>Bus loop</span>
+    <span><i class="sw" style="background:var(--approved);width:6px;height:6px"></i>Approved walk-to point</span>
+  </div>
+
+  <div class="panels" id="panels"></div>
+
+  <footer>
+    Demand is synthetic (one generated evening). Both maps replay the same riders. Fleet: 5 electric vans with 6 seats and 1 gas van with 8 seats. Drive times come from OSRM on OpenStreetMap roads. Vans, buses and walking riders follow their actual routes on the OpenStreetMap street and sidewalk network. Walking distances are measured along sidewalks and crossings, not in straight lines. The left map assumes today's dispatch carries one party at a time; replace that with Penn's real dispatch data before quoting savings. Map data © OpenStreetMap contributors.
+  </footer>
+</div>
+
+<script id="data" type="application/json">/*DATA*/</script>
+<script>
+(() => {
+const D = JSON.parse(document.getElementById('data').textContent);
+const [S0, W0, N0, E0] = D.bbox;
+const COS = Math.cos((S0 + N0) / 2 * Math.PI / 180);
+const WU = (E0 - W0) * 1e5 * COS, HU = (N0 - S0) * 1e5;
+const NODES = D.nodes;
+
+const PATHS = (D.paths || []).map(fl => { const pts = []; for (let i = 0; i < fl.length; i += 2) pts.push([fl[i], fl[i + 1]]);
+  const cum = [0]; for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot((pts[i][0] - pts[i - 1][0]) * COS, pts[i][1] - pts[i - 1][1]));
+  return { pts, cum, len: cum.at(-1) }; });
+// position a fraction f of the way along a routed street/sidewalk path
+function along(pi, f) { const P = PATHS[pi]; if (!P) return [0, 0]; if (P.pts.length < 2 || !P.len) return P.pts[0];
+  const d = Math.max(0, Math.min(1, f)) * P.len; let i = 1; while (i < P.cum.length - 1 && P.cum[i] < d) i++;
+  const s = (d - P.cum[i - 1]) / Math.max(1e-9, P.cum[i] - P.cum[i - 1]);
+  return [P.pts[i - 1][0] + (P.pts[i][0] - P.pts[i - 1][0]) * s, P.pts[i - 1][1] + (P.pts[i][1] - P.pts[i - 1][1]) * s]; }
+function strokePartial(c, xy, pi, f) { const P = PATHS[pi]; if (!P) return; const d = Math.min(1, f) * P.len;
+  c.beginPath(); let [x, y] = xy(P.pts[0]); c.moveTo(x, y);
+  for (let i = 1; i < P.pts.length; i++) { if (P.cum[i] > d) { [x, y] = xy(along(pi, f)); c.lineTo(x, y); break; } [x, y] = xy(P.pts[i]); c.lineTo(x, y); }
+  c.stroke(); }
+const T0 = D.start, T1 = D.end;
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const LABELS = [
+  ['30th St Station', 39.9566, -75.1822], ['Penn campus', 39.9512, -75.1950],
+  ['Clark Park', 39.9478, -75.2102], ['Powelton', 39.9618, -75.1935],
+  ['Spruce Hill', 39.9540, -75.2125], ['Cedar Park', 39.9478, -75.2195],
+];
+const qp = (lat, lon) => [(lon - W0) * 1e5, (lat - S0) * 1e5];
+
+const META = {
+  baseline: { title: "Today's dispatch", chips: [] },
+  all_levers: { title: 'All three levers', chips: ['pooling', 'walk points', 'bus handoffs'] },
+  pooling: { title: 'Dynamic pooling', chips: ['pooling'] },
+  'pool+walk': { title: 'Pooling + walk points', chips: ['pooling', 'walk points'] },
+  'pool+bus': { title: 'Pooling + bus handoffs', chips: ['pooling', 'bus handoffs'] },
+};
+const ALL_CHIPS = ['pooling', 'walk points', 'bus handoffs'];
+
+let C = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const k of ['map','street','street-major','ink','muted','ev','gas','on-ev','on-gas','rider','late','bus','approved','panel'])
+    C[k] = cs.getPropertyValue('--' + k).trim();
+}
+
+const fmtClock = s => { const h = Math.floor(s / 3600) % 24, m = Math.floor(s % 3600 / 60);
+  return `${(h % 12) || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; };
+const lerp = (a, b, f) => a + (b - a) * f;
+function bsearch(arr, t) { let lo = 0, hi = arr.length - 1, r = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (arr[m] <= t) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
+
+// ---- per-scenario precompute ---------------------------------------------
+const scenarios = Object.entries(D.scenarios).map(([name, S]) => {
+  const vans = S.vans.map(v => {
+    const t0s = [], cum = [0], dead = [0];
+    for (const L of v.legs) { t0s.push(L[0]); cum.push(cum.at(-1) + L[5]); dead.push(dead.at(-1) + (L[4] === 0 ? L[5] : 0)); }
+    return { ...v, t0s, cum, dead };
+  });
+  const riders = S.riders.map(r => ({ treq: r[0], o: r[1], pu: r[2], d: r[3], put: r[4], dot: r[5],
+    mode: r[6], status: r[7], pax: r[8], walk: r[9], earliest: r[10], wpath: r[11] }));
+  return { name, vans, riders, kpis: S.kpis, meta: META[name] || { title: name, chips: [] } };
+});
+const base = scenarios.find(s => s.name === 'baseline');
+
+function stats(S, t) {
+  let mi = 0, dmi = 0, kg = 0;
+  for (const v of S.vans) {
+    const i = bsearch(v.t0s, t); if (i < 0) continue;
+    const L = v.legs[i], f = L[1] > L[0] ? Math.min(1, (t - L[0]) / (L[1] - L[0])) : 1;
+    const m = v.cum[i] + L[5] * f; mi += m; kg += m * v.kg_per_mi;
+    dmi += v.dead[i] + (L[4] === 0 ? L[5] * f : 0);
+  }
+  let waiting = 0, wsum = 0, wn = 0, done = 0;
+  for (const r of S.riders) {
+    if (r.treq > t) continue;
+    if (r.put != null && r.put <= t) { wsum += r.put - r.earliest; wn++; if (r.dot != null && r.dot <= t) done++; }
+    else if (r.status === 'unserved' ? t < r.treq + 1800 : true) waiting++;
+  }
+  return { mi, dmi, kg, waiting, wait: wn ? wsum / wn / 60 : 0, done };
+}
+
+// ---- panels ----------------------------------------------------------------
+const host = document.getElementById('panels');
+for (const S of scenarios) {
+  const el = document.createElement('section');
+  el.className = 'panel';
+  el.innerHTML = `
+    <div class="ph"><h2>${S.meta.title}</h2>
+      <div class="chips">${ALL_CHIPS.map(c => `<span class="chip ${S.meta.chips.includes(c) ? 'on' : ''}">${S.meta.chips.includes(c) ? '' : 'no '}${c}</span>`).join('')}</div></div>
+    <div class="mapbox"><canvas class="base"></canvas><canvas class="live" role="img" aria-label="Map of vans and riders, ${S.meta.title}"></canvas></div>
+    <div class="kpis">
+      <div class="kpi"><b data-k="mi">0</b><span>Miles driven</span></div>
+      <div class="kpi"><b data-k="dead">0%</b><span>Driven empty</span></div>
+      <div class="kpi"><b data-k="waiting">0</b><span>Waiting now</span></div>
+      <div class="kpi"><b data-k="wait">0.0</b><span>Avg wait, min</span></div>
+      <div class="kpi"><b data-k="kg">0</b><span>CO₂ kg</span></div>
+    </div>
+    <div class="final"></div>`;
+  host.appendChild(el);
+  S.el = el;
+  S.baseCv = el.querySelector('canvas.base');
+  S.cv = el.querySelector('canvas.live');
+  S.ctx = S.cv.getContext('2d');
+  S.k = Object.fromEntries([...el.querySelectorAll('[data-k]')].map(b => [b.dataset.k, b]));
+  const K = S.kpis, B = base.kpis;
+  let fin = `Full evening: <strong>${Math.round(K.vehicle_miles)} mi</strong> · ${K.deadhead_pct.toFixed(0)}% empty · ${K.wait_mean_min.toFixed(1)} min avg wait · ${K.served_pct.toFixed(1)}% served`;
+  if (S !== base) {
+    fin += ` · <span class="delta">${Math.round(100 * (K.vehicle_miles / B.vehicle_miles - 1))}% miles, ${Math.round(100 * (K.kg_co2 / B.kg_co2 - 1))}% CO₂</span>`;
+    if (K.walked_riders || K.bus_handoffs) fin += ` · ${K.walked_riders} walked, ${K.bus_handoffs} bus handoffs`;
+  }
+  el.querySelector('.final').innerHTML = fin;
+}
+
+const nReq = scenarios[0].riders.length;
+document.getElementById('sub').textContent =
+  `Synthetic evening #${D.demand.night} · ${nReq} ride requests · ${D.fleet.n_ev + D.fleet.n_ice} vans (${D.fleet.n_ev} electric, ${D.fleet.n_ice} gas) · the same riders in both maps`;
+
+// ---- drawing ---------------------------------------------------------------
+function setupCanvas(cv, w, h) { const dpr = devicePixelRatio || 1;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const c = cv.getContext('2d'); c.setTransform(dpr, 0, 0, dpr, 0, 0); return c; }
+
+function drawBase(S) {
+  const box = S.cv.parentElement.getBoundingClientRect();
+  const w = box.width, h = box.height; S.w = w; S.h = h;
+  S.sc = Math.min(w / WU, h / HU);
+  S.ox = (w - WU * S.sc) / 2; S.oy = (h - HU * S.sc) / 2;
+  setupCanvas(S.cv, w, h);
+  const c = setupCanvas(S.baseCv, w, h);
+  c.fillStyle = C.map; c.fillRect(0, 0, w, h);
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  for (const rank of [1, 2, 3]) {
+    c.strokeStyle = rank === 1 ? C.street : C['street-major'];
+    c.lineWidth = rank === 1 ? 0.8 : rank === 2 ? 1.6 : 2.4;
+    c.beginPath();
+    for (const st of D.streets) { if (st[0] !== rank) continue;
+      for (let i = 1; i < st.length; i += 2) { const [x, y] = S.xy([st[i], st[i + 1]]); i === 1 ? c.moveTo(x, y) : c.lineTo(x, y); } }
+    c.stroke();
+  }
+  // bus loops
+  c.strokeStyle = C.bus; c.globalAlpha = 0.35; c.lineWidth = 3; c.setLineDash([6, 5]);
+  for (const R of D.bus) for (const pi of R.paths) strokePartial(c, S.xy, pi, 1);
+  c.setLineDash([]); c.globalAlpha = 1;
+  // approved walk-to points (only where the lever is on)
+  if (S.meta.chips.includes('walk points')) { c.fillStyle = C.approved;
+    for (const n of D.approved) { const [x, y] = S.xy(NODES[n]); c.fillRect(x - 1.5, y - 1.5, 3, 3); } }
+  // depot
+  const [dx, dy] = S.xy(NODES[D.depot]);
+  c.fillStyle = C.ink; c.fillRect(dx - 5, dy - 5, 10, 10);
+  c.font = `600 11px ${getComputedStyle(document.body).getPropertyValue('--f-display')}`;
+  c.fillText('Depot', dx + 8, dy + 4);
+  // place labels
+  c.fillStyle = C.muted; c.font = `600 ${w < 500 ? 10 : 12}px ${getComputedStyle(document.body).getPropertyValue('--f-display')}`;
+  for (const [t, la, lo] of LABELS) { const [x, y] = S.xy(qp(la, lo)); c.fillText(t.toUpperCase(), x - c.measureText(t.toUpperCase()).width / 2, y); }
+}
+
+function vanPos(S, v, t) {
+  const i = bsearch(v.t0s, t);
+  if (i < 0) return { p: NODES[D.depot], load: 0, moving: false };
+  const L = v.legs[i];
+  if (t < L[1]) { const f = (t - L[0]) / (L[1] - L[0]);
+    return { p: along(L[6], f), path: L[6], f, load: L[4], moving: true }; }
+  const next = v.legs[i + 1];
+  return { p: NODES[L[3]], load: next ? next[4] : 0, moving: false };
+}
+
+function busPositions(t) {
+  const out = [];
+  for (const R of D.bus) {
+    for (let dep = R.start; dep <= R.end && dep <= t; dep += R.headway) {
+      const e = t - dep; if (e >= R.loop) continue;
+      let k = R.offset.length - 1; while (k > 0 && R.offset[k] > e) k--;
+      const segEnd = k + 1 < R.offset.length ? R.offset[k + 1] : R.loop;
+      const f = Math.min(1, (e - R.offset[k]) / Math.max(1, segEnd - R.offset[k]));
+      out.push(along(R.paths[k], f));
+    }
+  }
+  return out;
+}
+
+function drawLive(S, t) {
+  const c = S.ctx, w = S.w, h = S.h;
+  c.clearRect(0, 0, w, h);
+  c.drawImage(S.baseCv, 0, 0, w, h);
+  const r = Math.max(4.5, Math.min(8, w / 110));
+  // buses
+  c.fillStyle = C.bus;
+  for (const p of busPositions(t)) { const [x, y] = S.xy(p); c.fillRect(x - r * 0.9, y - r * 0.6, r * 1.8, r * 1.2); }
+  // riders
+  for (const R of S.riders) {
+    if (R.treq > t) continue;
+    if (R.put != null && R.put <= t) continue;
+    if (R.status === 'unserved') {
+      if (t > R.treq + 1800) continue;
+      const [x, y] = S.xy(NODES[R.o]); c.strokeStyle = C.late; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(x - 3, y - 3); c.lineTo(x + 3, y + 3); c.moveTo(x + 3, y - 3); c.lineTo(x - 3, y + 3); c.stroke(); continue;
+    }
+    if (R.mode === 'bus+van' && t < R.earliest) continue;  // riding the bus
+    let p = NODES[R.pu];
+    if (R.mode === 'walk+van' && t < R.earliest && R.wpath >= 0) {
+      const f = (t - R.treq) / Math.max(1, R.earliest - R.treq);
+      p = along(R.wpath, f);
+      c.strokeStyle = C.rider; c.lineWidth = 1.2; c.setLineDash([2, 2]); strokePartial(c, S.xy, R.wpath, 1); c.setLineDash([]);
+    }
+    const [x, y] = S.xy(p);
+    c.fillStyle = t - R.earliest > 900 ? C.late : C.rider;
+    c.beginPath(); c.arc(x, y, 2.6, 0, 7); c.fill();
+  }
+  // vans
+  c.font = `600 ${Math.round(r * 1.25)}px ${getComputedStyle(document.body).getPropertyValue('--f-mono')}`;
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  for (const v of S.vans) {
+    const col = v.ev ? C.ev : C.gas;
+    const charging = v.charges.some(([a, b]) => t >= a && t < b);
+    const P = vanPos(S, v, t); const [x, y] = S.xy(P.p);
+    if (P.moving) { c.strokeStyle = col; c.globalAlpha = 0.35; c.lineWidth = 2; strokePartial(c, S.xy, P.path, P.f); c.globalAlpha = 1; }
+    c.beginPath(); c.arc(x, y, r, 0, 7);
+    if (P.load > 0) { c.fillStyle = col; c.fill(); if (r >= 5) { c.fillStyle = v.ev ? C['on-ev'] : C['on-gas']; c.fillText(P.load, x, y + 0.5); } }
+    else { c.fillStyle = C.panel; c.fill(); c.strokeStyle = col; c.lineWidth = 2.2; c.stroke(); }
+    if (charging) { c.strokeStyle = C.ev; c.lineWidth = 1.5; c.setLineDash([2, 2]); c.beginPath(); c.arc(x, y, r + 4, 0, 7); c.stroke(); c.setLineDash([]); }
+  }
+  c.textAlign = 'start'; c.textBaseline = 'alphabetic';
+}
+
+function updateKpis(S, t) {
+  const s = stats(S, t);
+  S.k.mi.textContent = s.mi.toFixed(0);
+  S.k.dead.textContent = s.mi > 0 ? (100 * s.dmi / s.mi).toFixed(0) + '%' : '0%';
+  S.k.waiting.textContent = s.waiting;
+  S.k.wait.textContent = s.wait.toFixed(1);
+  S.k.kg.textContent = s.kg.toFixed(0);
+}
+
+// ---- timeline -------------------------------------------------------------
+const hist = document.getElementById('hist'), scrub = document.getElementById('scrub');
+scrub.min = T0; scrub.max = T1;
+const BIN = 600, nb = Math.ceil((T1 - T0) / BIN), counts = new Array(nb).fill(0);
+for (const r of scenarios[0].riders) { const b = Math.floor((r.treq - T0) / BIN); if (b >= 0 && b < nb) counts[b]++; }
+document.getElementById('ticks').innerHTML = Array.from({ length: (T1 - T0) / 3600 + 1 }, (_, i) =>
+  `<span>${fmtClock(T0 + i * 3600).replace(':00 ', '').replace('M', '')}</span>`).join('');
+function drawHist(t) {
+  const w = hist.getBoundingClientRect().width, h = 34, c = setupCanvas(hist, w, h);
+  const mx = Math.max(...counts), bw = w / nb;
+  counts.forEach((n, i) => { const x = i * bw, bh = (n / mx) * (h - 4);
+    c.fillStyle = (T0 + (i + 1) * BIN) <= t ? C.ink : C.muted; c.globalAlpha = (T0 + (i + 1) * BIN) <= t ? 0.85 : 0.3;
+    c.fillRect(x + 0.5, h - bh, Math.max(1, bw - 1), bh); });
+  c.globalAlpha = 1;
+}
+
+// ---- loop -------------------------------------------------------------------
+let t = T0 + 2.5 * 3600, playing = !reduce, speed = 300, last = null, lastUi = 0;
+const playBtn = document.getElementById('play'), icon = document.getElementById('playicon');
+function setPlayIcon() { icon.innerHTML = playing ? '<rect x="4" y="3" width="4" height="14"/><rect x="12" y="3" width="4" height="14"/>' : '<path d="M5 3l12 7-12 7z"/>';
+  playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play'); }
+playBtn.onclick = () => { if (!playing && t >= T1) t = T0; playing = !playing; last = null; setPlayIcon(); };
+document.querySelectorAll('input[name=speed]').forEach(i => i.onchange = () => { speed = +i.value; });
+scrub.oninput = () => { t = +scrub.value; render(true); };
+
+function render(force) {
+  for (const S of scenarios) drawLive(S, t);
+  const now = performance.now();
+  if (force || now - lastUi > 120) {
+    lastUi = now;
+    for (const S of scenarios) updateKpis(S, t);
+    document.getElementById('clock').textContent = fmtClock(t);
+    document.getElementById('clockday').textContent = t >= 86400 ? 'after midnight' : 'evening service';
+    scrub.value = t; drawHist(t);
+  }
+}
+function frame(ts) {
+  if (playing) { if (last != null) t += Math.min(0.1, (ts - last) / 1000) * speed;
+    if (t >= T1) { t = T1; playing = false; setPlayIcon(); } }
+  last = ts; render(false); requestAnimationFrame(frame);
+}
+
+function layout() { readColors();
+  for (const S of scenarios) { S.xy = p => [S.ox + p[0] * COS * S.sc, S.oy + (HU - p[1]) * S.sc]; drawBase(S); }
+  render(true); }
+new ResizeObserver(() => layout()).observe(host);
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', layout);
+new MutationObserver(layout).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+document.fonts && document.fonts.ready.then(layout);
+setPlayIcon(); layout(); requestAnimationFrame(frame);
+})();
+</script>
