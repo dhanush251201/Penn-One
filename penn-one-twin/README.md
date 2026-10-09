@@ -76,3 +76,5 @@ python3 -m penn_twin.export_viz --compare pooling,pool+reopt,pool+bus,baseline-n
 python3 -m penn_twin.export_ops && python3 -m penn_twin.build_page
 ```
 `viz/replay.html` compares scenarios side by side on synced maps. The command above gives two rows: no optimization, pooling, pooling + re-optimization, and pooling + bus handoffs with Penn Bus, then the same four with no buses at all. `--compare pooling,pool+reopt` shows no optimization, pooling, and pooling + re-optimization instead. `viz/ops.html` is the operator console for one evening of `pool+reopt` (`export_ops --scenario` picks another): a map of the service area with labeled buildings, the optimizer's step-by-step decisions including every re-plan, and every van's schedule. On both pages a red tint marks everything outside the on-demand van area.
+
+Both pages are published to GitHub Pages at https://skandhan-13.github.io/Penn-One/ (the replay) and https://skandhan-13.github.io/Penn-One/ops.html by `.github/workflows/pages.yml` whenever a push to `main` changes them. Rebuild them with the commands above, commit, and push to update the site.
