@@ -1,23 +1,22 @@
-"""Fixed-route bus loops on the same road network (fixed headway timetable)."""
+"""Penn Bus fixed routes on the same road network, run to the published timetable."""
 import math
 
-from .geo import BUS_ROUTES
+from .geo import BUS_FIRST_S, BUS_HEADWAY_S, BUS_LAST_S, BUS_ROUTES
 
 
 class BusRoute:
-    def __init__(self, name, nodes, tt, headway_s=900, start_s=18 * 3600,
-                 end_s=24 * 3600, dwell_s=20):
-        seen, stops = set(), []
-        for n in nodes:  # drop stops that snapped to the same road node
-            if n not in seen:
-                seen.add(n)
-                stops.append(int(n))
-        self.name, self.stops = name, stops
+    def __init__(self, name, nodes, offsets_s, tt, headway_s=BUS_HEADWAY_S,
+                 start_s=BUS_FIRST_S, end_s=BUS_LAST_S, dwell_s=20):
+        self.stops, self.offset = [], []
+        for n, off in zip(nodes, offsets_s):  # drop stops that snapped to the same road node
+            if int(n) not in self.stops:
+                self.stops.append(int(n))
+                self.offset.append(float(off))
+        self.name = name
         self.headway, self.start, self.end = headway_s, start_s, end_s
-        self.offset = [0.0]
-        for a, b in zip(stops, stops[1:]):
-            self.offset.append(self.offset[-1] + tt(a, b) + dwell_s)
-        self.loop_s = self.offset[-1] + tt(stops[-1], stops[0]) + dwell_s
+        # The timetable ends at the last timepoint; the drive back to the first stop is not
+        # published, so it comes from road travel time.
+        self.loop_s = self.offset[-1] + tt(self.stops[-1], self.stops[0]) + dwell_s
 
     def next_departure(self, k, t):
         """Earliest time >= t a bus leaves stop index k, or None if service is over."""
@@ -25,17 +24,22 @@ class BusRoute:
         dep0 = self.start + m * self.headway
         return None if dep0 > self.end else dep0 + self.offset[k]
 
+    def last_departure(self, k):
+        """Time the last bus of the evening leaves stop index k."""
+        return self.start + (self.end - self.start) // self.headway * self.headway + self.offset[k]
+
     def ride_s(self, k1, k2):
         r = self.offset[k2] - self.offset[k1]
         return r if r > 0 else r + self.loop_s
 
 
 class Transit:
-    def __init__(self, net, tt, headway_s=900, start_s=18 * 3600, end_s=24 * 3600):
+    def __init__(self, net, tt, headway_s=BUS_HEADWAY_S, start_s=BUS_FIRST_S, end_s=BUS_LAST_S):
         self.routes = []
-        for name, pts in BUS_ROUTES.items():
-            nodes = net.nearest_node([p[0] for p in pts], [p[1] for p in pts])
-            self.routes.append(BusRoute(name, nodes, tt, headway_s, start_s, end_s))
+        for name, stops in BUS_ROUTES.items():
+            nodes = net.nearest_node([p[0] for _, p, _ in stops], [p[1] for _, p, _ in stops])
+            self.routes.append(BusRoute(name, nodes, [m * 60 for _, _, m in stops], tt,
+                                        headway_s, start_s, end_s))
         net.mark_approved({s for r in self.routes for s in r.stops})  # stops are lit, staffed corridors
 
     def plan(self, req, net, tt, policy, van_wait_est=300):

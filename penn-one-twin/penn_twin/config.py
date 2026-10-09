@@ -37,9 +37,10 @@ class SimConfig:
 @dataclass
 class Policy:
     name: str = "baseline"
-    pooling: bool = False             # lever 1: insert into routes with riders onboard
+    engine: str = "direct"            # optimization engine (engines/): direct | greedy | reopt
     walk_points: bool = False         # lever 2: opt-in short walks to approved points
     bus_handoffs: bool = False        # lever 3: first/last-mile handoff to fixed route
+    buses: bool = True                # Penn Bus runs at all (False: vans only, nothing to hand off to)
 
     # rider guarantees
     max_wait_s: int = 1800            # request dropped if no pickup possible within this
@@ -63,13 +64,26 @@ class Policy:
     bus_max_extra_s: int = 600        # accept handoff only if <= this slower than direct van
     van_leg_max_frac: float = 0.6     # van leg must be <= this fraction of the direct trip
 
+    # reopt engine: on each new request, re-plan every rider still waiting for pickup
+    reopt_freeze_s: int = 180         # a waiting rider is locked once their van is this close
+    reopt_early_s: int = 120          # pickup never more than this before the quoted time
+    reopt_max_switches: int = 1       # van changes allowed per rider
+    reopt_switch_s: float = 60.0      # cost of moving a rider to another van
+    reopt_ride_weight: float = 0.25   # cost weight on request-to-drop-off time (half of wait_weight)
+
 
 SCENARIOS = {
-    "baseline":      Policy("baseline"),
-    "pooling":       Policy("pooling", pooling=True),
-    "pool+walk":     Policy("pool+walk", pooling=True, walk_points=True),
-    "pool+bus":      Policy("pool+bus", pooling=True, bus_handoffs=True),
-    "all_levers":    Policy("all_levers", pooling=True, walk_points=True, bus_handoffs=True),
+    "baseline":      Policy("baseline", engine="direct"),
+    "pooling":       Policy("pooling", engine="greedy"),           # lever 1: dynamic pooling
+    "pool+reopt":    Policy("pool+reopt", engine="reopt"),
+    "pool+walk":     Policy("pool+walk", engine="greedy", walk_points=True),
+    "pool+bus":      Policy("pool+bus", engine="greedy", bus_handoffs=True),
+    "all_levers":    Policy("all_levers", engine="greedy", walk_points=True, bus_handoffs=True),
+    # the same, with no Penn Bus at all
+    "baseline-nobus": Policy("baseline-nobus", engine="direct", buses=False),
+    "pooling-nobus":  Policy("pooling-nobus", engine="greedy", buses=False),
+    "pool+reopt-nobus": Policy("pool+reopt-nobus", engine="reopt", buses=False),
+    "pool+bus-nobus": Policy("pool+bus-nobus", engine="greedy", bus_handoffs=True, buses=False),
 }
 
 

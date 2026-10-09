@@ -4,6 +4,7 @@ Nodes are a ~150 m grid over the service area snapped to drivable roads via OSRM
 Travel durations/distances come from the OSRM table API (cached to disk). Without
 network access we fall back to a haversine approximation (1.3x straight line).
 """
+import hashlib
 import json
 import time
 import urllib.request
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .geo import APPROVED_CORRIDORS, BBOX, haversine_m
+from .geo import APPROVED_CORRIDORS, BBOX, SERVICE_AREA, haversine_m, service_area_gap_m
 
 OSRM_URL = "https://router.project-osrm.org"
 CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "cache"
@@ -80,10 +81,13 @@ class Network:
     # ---- construction --------------------------------------------------
     @classmethod
     def build(cls, spacing_m=150, bbox=BBOX, offline=False, osrm_url=OSRM_URL,
-              max_snap_m=90, verbose=True):
+              max_snap_m=90, margin_m=75, verbose=True):
+        """Grid points inside the service area (plus margin_m, so addresses on the edge
+        have a nearby node), snapped to roads; cached per grid and service area."""
         src = "haversine" if offline else "osrm"
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cache = CACHE_DIR / f"net_{src}_{spacing_m}_{'_'.join(map(str, bbox))}.npz"
+        area = hashlib.sha1(json.dumps(SERVICE_AREA).encode()).hexdigest()[:8]
+        cache = CACHE_DIR / f"net_{src}_{spacing_m}_{'_'.join(map(str, bbox))}_{area}.npz"
         if cache.exists():
             z = np.load(cache, allow_pickle=True)
             return cls(z["lat"], z["lon"], z["dur"], z["dist"], z["names"],
@@ -95,6 +99,10 @@ class Network:
         dlon = spacing_m / (111320.0 * np.cos(np.radians(lat0)))
         glat, glon = np.meshgrid(np.arange(s, n, dlat), np.arange(w, e, dlon), indexing="ij")
         glat, glon = glat.ravel(), glon.ravel()
+        keep = service_area_gap_m(glat, glon) <= margin_m
+        glat, glon = glat[keep], glon[keep]
+        if verbose:
+            print(f"[network] {keep.sum()} grid points in the service area; snapping to roads...")
 
         if offline:
             net = cls._build_offline(glat, glon)

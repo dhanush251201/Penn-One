@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import FleetConfig, SimConfig, scenario
 from .demand import synthesize, to_requests
-from .geo import BBOX, M_PER_MILE
+from .geo import BBOX, M_PER_MILE, SERVICE_AREA
 from .history import pickup_density
 from .metrics import summarize
 from .network import CACHE_DIR, Network
@@ -95,7 +95,7 @@ def run_one(net, df, name, fleet, simcfg, transit, density=None, bank=None):
                        r.mode, r.status, r.pax, round(r.walk_s), round(r.earliest_pu),
                        bank.want("walk", r.o, r.pu_node) if r.mode == "walk+van" else -1])
     m = summarize(sim)
-    return {"vans": vans, "riders": riders,
+    return {"vans": vans, "riders": riders, "engine": sim.disp.engine.name, "buses": sim.P.buses,
             "kpis": {k: (None if v != v else round(float(v), 2)) for k, v in m.items()}}
 
 
@@ -103,7 +103,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--night", type=int, default=0)
     ap.add_argument("--trips-per-night", type=int, default=300)
-    ap.add_argument("--compare", default="all_levers")
+    ap.add_argument("--base", default="baseline", help="scenario on the left map")
+    ap.add_argument("--compare", default="all_levers",
+                    help="scenario(s) on the other map(s), comma-separated")
     ap.add_argument("--out", default="viz/replay_data.json")
     args = ap.parse_args(argv)
 
@@ -119,6 +121,7 @@ def main(argv=None):
         "bbox": BBOX,
         "nodes": [q(la, lo) for la, lo in zip(net.lat, net.lon)],
         "approved": [int(i) for i in net.approved.nonzero()[0]],
+        "area": [q(la, lo) for la, lo in SERVICE_AREA],
         "depot": int(net.nearest_node(*simcfg.depot)[0]),
         "start": simcfg.service_start_s, "end": simcfg.service_end_s,
         "streets": streets(),
@@ -128,7 +131,7 @@ def main(argv=None):
         "demand": {"night": args.night, "requests": len(df)},
         "scenarios": {},
     }
-    for name in ("baseline", args.compare):
+    for name in [args.base, *args.compare.split(",")]:
         data["scenarios"][name] = run_one(net, df, name, fleet, simcfg, transit, density, bank)
         print(name, data["scenarios"][name]["kpis"]["vehicle_miles"], "mi")
     data["paths"] = bank.build()

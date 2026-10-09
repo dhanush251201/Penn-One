@@ -22,7 +22,7 @@ from .transit import Transit
 KEY_METRICS = ["served_pct", "vehicle_miles", "deadhead_pct", "rides_per_veh_hr",
                "pooled_pct", "wait_mean_min", "wait_p90_min", "door_to_door_mean_min",
                "max_pickup_slip_min", "kwh_eq_per_pax_mile", "kg_co2", "ev_mile_share_pct",
-               "walked_riders", "bus_handoffs"]
+               "walked_riders", "bus_handoffs", "van_changes", "reopt_improved"]
 
 
 def main(argv=None):
@@ -59,7 +59,7 @@ def main(argv=None):
             m = summarize(sim)
             rows.append({"scenario": name, "night": k, **m})
             trips_frame(sim).to_csv(out / f"trips_{name}_night{k}.csv", index=False)
-            print(f"  {name:<11} night {k}: served {m['served_pct']:.1f}%  "
+            print(f"  {name:<11} [{pol.engine}] night {k}: served {m['served_pct']:.1f}%  "
                   f"miles {m['vehicle_miles']:.0f}  deadhead {m['deadhead_pct']:.1f}%  "
                   f"wait {m['wait_mean_min']:.1f} min")
 
@@ -76,7 +76,7 @@ def main(argv=None):
          "policies": {n: asdict(scenario(n)) for n in args.scenarios.split(",")},
          "network": {"source": net.source, "nodes": int(net.n)},
          "demand": args.trips or f"synthetic x{args.nights} nights"}, indent=2))
-    with pd.option_context("display.width", 200, "display.precision", 2):
+    with pd.option_context("display.width", 200, "display.max_columns", None, "display.precision", 2):
         print("\n=== mean over nights ===")
         print(mean.T)
     print(f"\nwrote {out}/")

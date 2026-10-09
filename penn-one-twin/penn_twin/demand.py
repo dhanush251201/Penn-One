@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .geo import BBOX, LANDMARKS, haversine_m
+from .geo import BBOX, LANDMARKS, haversine_m, in_service_area
 
 # Relative request rate per hour of the evening service (18 = 6 pm, 26 = 2 am)
 HOURLY_PROFILE = {18: 0.55, 19: 0.8, 20: 1.0, 21: 1.1, 22: 1.15, 23: 1.1, 24: 0.9, 25: 0.6, 26: 0.35}
@@ -22,11 +22,25 @@ COLUMNS = ["request_time_s", "origin_lat", "origin_lon", "dest_lat", "dest_lon",
            "party_size", "accessible", "u_walk", "u_bus"]
 
 
-def _sample_point(rng, idx):
+_INSIDE = None  # ~40 m grid of points inside the service area (fallback for edge landmarks)
+
+
+def _sample_point(rng, idx, tries=10):
+    """A request end near landmark idx, always inside the service area: redraw a few
+    times, then fall back to the closest inside point (for landmarks on the edge)."""
+    global _INSIDE
     _, (la, lo), _, _, spread = LANDMARKS[idx]
-    s, w, n, e = BBOX
-    dlat, dlon = rng.normal(0, spread, 2) / np.array([111320.0, 85000.0])
-    return float(np.clip(la + dlat, s, n)), float(np.clip(lo + dlon, w, e))
+    for _ in range(tries):
+        dlat, dlon = rng.normal(0, spread, 2) / np.array([111320.0, 85000.0])
+        p = (float(la + dlat), float(lo + dlon))
+        if in_service_area(*p):
+            return p
+    if _INSIDE is None:
+        s, w, n, e = BBOX
+        g = np.array(np.meshgrid(np.arange(s, n, 0.00036), np.arange(w, e, 0.00047))).reshape(2, -1).T
+        _INSIDE = g[in_service_area(g[:, 0], g[:, 1])]
+    k = np.argmin(haversine_m(p[0], p[1], _INSIDE[:, 0], _INSIDE[:, 1]))
+    return float(_INSIDE[k, 0]), float(_INSIDE[k, 1])
 
 
 def synthesize(n_trips=450, seed=0):
@@ -96,7 +110,10 @@ class Request:
     earliest_pu: float = 0.0
     latest_pu: float = 0.0
     max_ride_s: float = 0.0
+    latest_do: float = float("inf")    # van+bus: drop at the stop before the last bus leaves
     promised_pu: float = None
+    not_before: float = 0.0            # re-optimization never picks up earlier than this
+    switches: int = 0                  # times re-optimization moved this rider to another van
     pu_t: float = None
     do_t: float = None
     vid: int = None

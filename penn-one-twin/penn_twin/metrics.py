@@ -58,4 +58,7 @@ def summarize(sim):
         "walked_riders": int((served["mode"] == "walk+van").sum()),
         "bus_handoffs": int(served["mode"].isin(["van+bus", "bus+van"]).sum()),
         "stranded_after_bus": int(served.door_to_door_min.isna().sum()),
+        "van_changes": int(sum(r.switches for r in sim.reqs)),
+        "reopt_runs": sim.disp.engine.stats.get("runs", 0),
+        "reopt_improved": sim.disp.engine.stats.get("improved", 0),
     }

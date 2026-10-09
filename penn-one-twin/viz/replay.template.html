@@ -3,14 +3,14 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&family=Overpass+Mono:wght@400;600&display=swap">
 <style>
-/* Layout: transit-ops console. Shared clock + timeline on top, two synced maps (today vs. levers) below, live KPIs under each map. */
+/* Layout: transit-ops console. Shared clock + timeline on top, one synced map per scenario below (two or three across), live KPIs under each map. */
 :root {
   --bg: #eaeef2; --panel: #f7f9fb; --map: #e2e7ec; --line: #d3dae1;
   --street: #c9d1d9; --street-major: #aab4bf;
   --ink: #17202a; --muted: #586574;
   --ev: #0d8576; --gas: #b86e0c; --on-ev: #ffffff; --on-gas: #ffffff;
   --rider: #7637b5; --late: #c42f28; --bus: #2b59c9; --approved: #3d8f5a;
-  --focus: #2b59c9;
+  --focus: #2b59c9; --outside: rgba(196, 47, 40, .13);
   --f-display: "Overpass", "Highway Gothic", "Arial Narrow", system-ui, sans-serif;
   --f-mono: "Overpass Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
@@ -21,7 +21,7 @@
     --ink: #e4eaf0; --muted: #93a0ad;
     --ev: #35c2ae; --gas: #eea43a; --on-ev: #062521; --on-gas: #2a1800;
     --rider: #b78cf2; --late: #f2665b; --bus: #7097f6; --approved: #6cc68a;
-    --focus: #7097f6; color-scheme: dark;
+    --focus: #7097f6; --outside: rgba(242, 102, 91, .14); color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
@@ -30,7 +30,7 @@
   --ink: #e4eaf0; --muted: #93a0ad;
   --ev: #35c2ae; --gas: #eea43a; --on-ev: #062521; --on-gas: #2a1800;
   --rider: #b78cf2; --late: #f2665b; --bus: #7097f6; --approved: #6cc68a;
-  --focus: #7097f6; color-scheme: dark;
+  --focus: #7097f6; --outside: rgba(242, 102, 91, .14); color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { background: var(--bg); color: var(--ink); font-family: var(--f-display); font-size: 15px; line-height: 1.45; }
@@ -61,9 +61,18 @@ button, .seg label { font: 600 13px/1 var(--f-display); color: var(--ink); }
 .sw { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
 
 .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.panels[data-cols="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.panels[data-cols="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.wrap:has(.panels[data-cols="3"]) { max-width: 1680px; }
+.wrap:has(.panels[data-cols="4"]) { max-width: 1960px; }
+.panels:is([data-cols="3"], [data-cols="4"]) .kpi { padding: 8px 9px; }
+.panels:is([data-cols="3"], [data-cols="4"]) .kpi b { font-size: 17px; }
+.panels:is([data-cols="3"], [data-cols="4"]) .kpi span { font-size: 10px; letter-spacing: .03em; }
+.rowhead { grid-column: 1 / -1; margin: 6px 0 -6px; font: 600 12px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; min-width: 0; display: grid; align-content: start; }
 .ph { padding: 12px 14px 10px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; }
 .ph h2 { margin: 0; font-size: 18px; font-weight: 800; }
+.eng { font-family: var(--f-mono); font-size: 11px; color: var(--muted); }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { font-family: var(--f-mono); font-size: 11px; padding: 3px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
 .chip.on { color: var(--ink); border-color: var(--ink); }
@@ -77,8 +86,15 @@ button, .seg label { font: 600 13px/1 var(--f-display); color: var(--ink); }
 .final { padding: 8px 14px 12px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .final strong { color: var(--ink); font-weight: 600; }
 .delta { color: var(--ev); font-weight: 600; }
+.delta.worse { color: var(--late); }
 footer { font-size: 12.5px; color: var(--muted); max-width: 95ch; }
 
+@media (max-width: 1400px) {
+  .panels[data-cols="4"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1100px) {
+  .panels:is([data-cols="3"], [data-cols="4"]) { grid-template-columns: 1fr; }
+}
 @media (max-width: 900px) {
   .panels { grid-template-columns: 1fr; }
 }
@@ -125,12 +141,13 @@ footer { font-size: 12.5px; color: var(--muted); max-width: 95ch; }
     <span><i class="sw" style="background:var(--late);width:8px;height:8px"></i>Waiting 15+ min</span>
     <span><i class="sw" style="background:var(--bus);border-radius:2px"></i>Bus loop</span>
     <span><i class="sw" style="background:var(--approved);width:6px;height:6px"></i>Approved walk-to point</span>
+    <span><i class="sw" style="background:var(--outside);border:1.5px dashed var(--muted);border-radius:2px"></i>Outside the on-demand van area</span>
   </div>
 
   <div class="panels" id="panels"></div>
 
   <footer>
-    Demand is synthetic (one generated evening). Both maps replay the same riders. Fleet: 5 electric vans with 6 seats and 1 gas van with 8 seats. Drive times come from OSRM on OpenStreetMap roads. Vans, buses and walking riders follow their actual routes on the OpenStreetMap street and sidewalk network. Walking distances are measured along sidewalks and crossings, not in straight lines. The left map assumes today's dispatch carries one party at a time; replace that with Penn's real dispatch data before quoting savings. Map data © OpenStreetMap contributors.
+    Penn-One optimization engines on simulated demand · Map © OpenStreetMap contributors
   </footer>
 </div>
 
@@ -162,22 +179,24 @@ const LABELS = [
   ['30th St Station', 39.9566, -75.1822], ['Penn campus', 39.9512, -75.1950],
   ['Clark Park', 39.9478, -75.2102], ['Powelton', 39.9618, -75.1935],
   ['Spruce Hill', 39.9540, -75.2125], ['Cedar Park', 39.9478, -75.2195],
+  ['Fitler Square', 39.9488, -75.1785],
 ];
 const qp = (lat, lon) => [(lon - W0) * 1e5, (lat - S0) * 1e5];
 
 const META = {
-  baseline: { title: "Today's dispatch", chips: [] },
+  baseline: { title: 'No optimization', chips: [] },
   all_levers: { title: 'All three levers', chips: ['pooling', 'walk points', 'bus handoffs'] },
   pooling: { title: 'Dynamic pooling', chips: ['pooling'] },
   'pool+walk': { title: 'Pooling + walk points', chips: ['pooling', 'walk points'] },
   'pool+bus': { title: 'Pooling + bus handoffs', chips: ['pooling', 'bus handoffs'] },
+  'pool+reopt': { title: 'Pooling + re-optimization', chips: ['pooling', 're-optimization'] },
 };
-const ALL_CHIPS = ['pooling', 'walk points', 'bus handoffs'];
+const ALL_CHIPS = ['pooling', 're-optimization', 'walk points', 'bus handoffs', 'buses'];
 
 let C = {};
 function readColors() {
   const cs = getComputedStyle(document.documentElement);
-  for (const k of ['map','street','street-major','ink','muted','ev','gas','on-ev','on-gas','rider','late','bus','approved','panel'])
+  for (const k of ['map','street','street-major','ink','muted','ev','gas','on-ev','on-gas','rider','late','bus','approved','panel','outside'])
     C[k] = cs.getPropertyValue('--' + k).trim();
 }
 
@@ -196,9 +215,17 @@ const scenarios = Object.entries(D.scenarios).map(([name, S]) => {
   });
   const riders = S.riders.map(r => ({ treq: r[0], o: r[1], pu: r[2], d: r[3], put: r[4], dot: r[5],
     mode: r[6], status: r[7], pax: r[8], walk: r[9], earliest: r[10], wpath: r[11] }));
-  return { name, vans, riders, kpis: S.kpis, meta: META[name] || { title: name, chips: [] } };
+  // a "-nobus" scenario is its twin with no Penn Bus at all
+  const meta = META[name] || META[name.replace(/-nobus$/, '')] || { title: name, chips: [] };
+  const buses = S.buses !== false;
+  return { name, vans, riders, kpis: S.kpis, engine: S.engine, buses, meta,
+           chips: [...meta.chips, ...(buses ? ['buses'] : [])] };
 });
-const base = scenarios.find(s => s.name === 'baseline');
+const base = scenarios[0];  // first map; every other map's deltas are measured against it
+const mixedBuses = scenarios.some(s => !s.buses);
+// only show chips for features at least one map uses (and "buses" only when some map has none)
+const CHIPS = ALL_CHIPS.filter(c => c === 'buses' ? mixedBuses : scenarios.some(s => s.chips.includes(c)));
+const pct = (a, b) => { const d = Math.round(100 * (a / b - 1)); return `${d > 0 ? '+' : d < 0 ? '−' : ''}${Math.abs(d)}%`; };
 
 function stats(S, t) {
   let mi = 0, dmi = 0, kg = 0;
@@ -219,13 +246,21 @@ function stats(S, t) {
 
 // ---- panels ----------------------------------------------------------------
 const host = document.getElementById('panels');
-for (const S of scenarios) {
+// one row per bus setting when maps differ in buses; up to 4 maps across
+host.dataset.cols = Math.min(Math.max(mixedBuses ? scenarios.filter(s => s.buses).length : scenarios.length, 2), 4);
+for (const [i, S] of scenarios.entries()) {
+  if (mixedBuses && (i === 0 || S.buses !== scenarios[i - 1].buses)) {
+    const h = document.createElement('h3');
+    h.className = 'rowhead';
+    h.textContent = S.buses ? 'With Penn Bus' : 'No buses';
+    host.appendChild(h);
+  }
   const el = document.createElement('section');
   el.className = 'panel';
   el.innerHTML = `
-    <div class="ph"><h2>${S.meta.title}</h2>
-      <div class="chips">${ALL_CHIPS.map(c => `<span class="chip ${S.meta.chips.includes(c) ? 'on' : ''}">${S.meta.chips.includes(c) ? '' : 'no '}${c}</span>`).join('')}</div></div>
-    <div class="mapbox"><canvas class="base"></canvas><canvas class="live" role="img" aria-label="Map of vans and riders, ${S.meta.title}"></canvas></div>
+    <div class="ph"><div><h2>${S.meta.title}</h2>${S.engine ? `<div class="eng">engine: ${S.engine}</div>` : ''}</div>
+      <div class="chips">${CHIPS.map(c => `<span class="chip ${S.chips.includes(c) ? 'on' : ''}">${S.chips.includes(c) ? '' : 'no '}${c}</span>`).join('')}</div></div>
+    <div class="mapbox"><canvas class="base"></canvas><canvas class="live" role="img" aria-label="Map of vans and riders, ${S.meta.title}${S.buses ? '' : ', no buses'}"></canvas></div>
     <div class="kpis">
       <div class="kpi"><b data-k="mi">0</b><span>Miles driven</span></div>
       <div class="kpi"><b data-k="dead">0%</b><span>Driven empty</span></div>
@@ -240,18 +275,25 @@ for (const S of scenarios) {
   S.cv = el.querySelector('canvas.live');
   S.ctx = S.cv.getContext('2d');
   S.k = Object.fromEntries([...el.querySelectorAll('[data-k]')].map(b => [b.dataset.k, b]));
-  const K = S.kpis, B = base.kpis;
+  const K = S.kpis;
+  const d = (a, b, unit) => `<span class="delta${a > b ? ' worse' : ''}">${pct(a, b)} ${unit}</span>`;
+  const vs = (R, label) => `${d(K.vehicle_miles, R.kpis.vehicle_miles, 'miles')}, ${d(K.kg_co2, R.kpis.kg_co2, 'CO₂')} vs ${label}`;
+  // a bus-free map is compared with its with-bus twin; later maps also with the second one
+  const twin = S.name.endsWith('-nobus') ? scenarios.find(s => s.name === S.name.slice(0, -6)) : null;
   let fin = `Full evening: <strong>${Math.round(K.vehicle_miles)} mi</strong> · ${K.deadhead_pct.toFixed(0)}% empty · ${K.wait_mean_min.toFixed(1)} min avg wait · ${K.served_pct.toFixed(1)}% served`;
-  if (S !== base) {
-    fin += ` · <span class="delta">${Math.round(100 * (K.vehicle_miles / B.vehicle_miles - 1))}% miles, ${Math.round(100 * (K.kg_co2 / B.kg_co2 - 1))}% CO₂</span>`;
+  if (i > 0) {
+    fin += ` · ${vs(base, base.meta.title.toLowerCase())}`;
+    if (twin && twin !== base) fin += ` · ${vs(twin, 'the same with buses')}`;
+    else if (!twin && i > 1) fin += ` · ${vs(scenarios[1], scenarios[1].meta.title.toLowerCase())}`;
     if (K.walked_riders || K.bus_handoffs) fin += ` · ${K.walked_riders} walked, ${K.bus_handoffs} bus handoffs`;
+    if (K.reopt_improved) fin += ` · ${K.reopt_improved} re-plans, ${K.van_changes} riders moved`;
   }
   el.querySelector('.final').innerHTML = fin;
 }
 
 const nReq = scenarios[0].riders.length;
 document.getElementById('sub').textContent =
-  `Synthetic evening #${D.demand.night} · ${nReq} ride requests · ${D.fleet.n_ev + D.fleet.n_ice} vans (${D.fleet.n_ev} electric, ${D.fleet.n_ice} gas) · the same riders in both maps`;
+  `Synthetic evening #${D.demand.night} · ${nReq} ride requests · ${D.fleet.n_ev + D.fleet.n_ice} vans (${D.fleet.n_ev} electric, ${D.fleet.n_ice} gas) · the same riders in ${scenarios.length === 2 ? 'both' : 'every'} map${scenarios.length === 2 ? 's' : ''}`;
 
 // ---- drawing ---------------------------------------------------------------
 function setupCanvas(cv, w, h) { const dpr = devicePixelRatio || 1;
@@ -275,12 +317,23 @@ function drawBase(S) {
       for (let i = 1; i < st.length; i += 2) { const [x, y] = S.xy([st[i], st[i + 1]]); i === 1 ? c.moveTo(x, y) : c.lineTo(x, y); } }
     c.stroke();
   }
-  // bus loops
-  c.strokeStyle = C.bus; c.globalAlpha = 0.35; c.lineWidth = 3; c.setLineDash([6, 5]);
-  for (const R of D.bus) for (const pi of R.paths) strokePartial(c, S.xy, pi, 1);
-  c.setLineDash([]); c.globalAlpha = 1;
+  // van service boundary: red tint outside it (even-odd fill of canvas minus the area), dashed edge
+  if (D.area) {
+    c.beginPath(); c.rect(0, 0, w, h);
+    D.area.forEach((p, i) => { const [x, y] = S.xy(p); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+    c.closePath(); c.fillStyle = C.outside; c.fill('evenodd');
+    c.strokeStyle = C.ink; c.globalAlpha = 0.45; c.lineWidth = 1.5; c.setLineDash([3, 4]); c.beginPath();
+    D.area.forEach((p, i) => { const [x, y] = S.xy(p); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+    c.closePath(); c.stroke(); c.setLineDash([]); c.globalAlpha = 1;
+  }
+  // bus loops (not on maps with no Penn Bus)
+  if (S.buses) {
+    c.strokeStyle = C.bus; c.globalAlpha = 0.35; c.lineWidth = 3; c.setLineDash([6, 5]);
+    for (const R of D.bus) for (const pi of R.paths) strokePartial(c, S.xy, pi, 1);
+    c.setLineDash([]); c.globalAlpha = 1;
+  }
   // approved walk-to points (only where the lever is on)
-  if (S.meta.chips.includes('walk points')) { c.fillStyle = C.approved;
+  if (S.chips.includes('walk points')) { c.fillStyle = C.approved;
     for (const n of D.approved) { const [x, y] = S.xy(NODES[n]); c.fillRect(x - 1.5, y - 1.5, 3, 3); } }
   // depot
   const [dx, dy] = S.xy(NODES[D.depot]);
@@ -323,7 +376,7 @@ function drawLive(S, t) {
   const r = Math.max(4.5, Math.min(8, w / 110));
   // buses
   c.fillStyle = C.bus;
-  for (const p of busPositions(t)) { const [x, y] = S.xy(p); c.fillRect(x - r * 0.9, y - r * 0.6, r * 1.8, r * 1.2); }
+  if (S.buses) for (const p of busPositions(t)) { const [x, y] = S.xy(p); c.fillRect(x - r * 0.9, y - r * 0.6, r * 1.8, r * 1.2); }
   // riders
   for (const R of S.riders) {
     if (R.treq > t) continue;

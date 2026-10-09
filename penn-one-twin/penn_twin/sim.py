@@ -1,58 +1,25 @@
 """Discrete-time digital twin of the on-demand van service.
 
 The simulator owns time and vehicle motion; the Dispatcher only decides where new
-requests go. That split is deliberate: in the Phase 2 shadow pilot the same
-Dispatcher is fed live requests and fleet positions instead of simulated ones.
+requests go, delegating the optimization itself to an engine (see engines/). That split
+is deliberate: in the Phase 2 shadow pilot the same Dispatcher and engines are fed live
+requests and fleet positions instead of simulated ones.
 
 Simplifications: vehicles move node-to-node using matrix travel times, a leg is
 locked once the van departs (no mid-leg diversion), and idle vans wait where they
 dropped off (no rebalancing).
 """
-from dataclasses import dataclass, field
-
 import numpy as np
 
+from .engines import make_engine
 from .geo import M_PER_MILE
-
-
-@dataclass(eq=False)
-class Stop:
-    req: object
-    kind: str  # "P" pickup | "D" dropoff
-
-    @property
-    def node(self):
-        return self.req.pu_node if self.kind == "P" else self.req.do_node
-
-
-@dataclass(eq=False)
-class Vehicle:
-    vid: int
-    is_ev: bool
-    cap: int
-    node: int
-    avail_t: float
-    soc_kwh: float = 0.0
-    route: list = field(default_factory=list)
-    onboard: dict = field(default_factory=dict)
-    charging_until: float = -1.0
-    miles: float = 0.0
-    deadhead_miles: float = 0.0
-    pax_miles: float = 0.0
-    kwh: float = 0.0       # drawn from battery
-    gallons: float = 0.0
-    n_charges: int = 0
-    charge_kwh_wall: float = 0.0
-    legs: list = field(default_factory=list)     # (depart, arrive, from, to, load, soc_after)
-    charges: list = field(default_factory=list)  # (start, end)
-
-    @property
-    def load(self):
-        return sum(r.pax for r in self.onboard.values())
+from .model import Vehicle
 
 
 class Dispatcher:
-    """Cheapest-insertion dispatcher with hard rider guarantees and range checks."""
+    """Front door for dispatch: route evaluation with hard rider guarantees and range checks,
+    the levers that shape each request, quoting, and decision logs. Which van serves a
+    request, and in what stop order, is up to the engine named by `policy.engine`."""
 
     def __init__(self, net, policy, fleet_cfg, sim_cfg, depot_node, transit=None, density=None):
         self.net, self.P, self.F, self.S = net, policy, fleet_cfg, sim_cfg
@@ -70,6 +37,8 @@ class Dispatcher:
             self.walk_cands.append([int(j) for j in c[:policy.walk_candidates]])
         self.decisions = []   # one entry per dispatch decision (for the operator console)
         self.snapshots = []   # (time, vid, [(node, kind, rid, eta), ...]) after each change
+        self.moves = []       # riders an engine moved between vans, queued riders it placed
+        self.engine = make_engine(policy.engine, self)
 
     def tt(self, a, b):
         return self.tt_mat[a, b]
@@ -86,7 +55,7 @@ class Dispatcher:
             meters += self.net.dist[node, s.node]
             node = s.node
             if s.kind == "P":
-                t = max(t, r.earliest_pu)
+                t = max(t, r.earliest_pu, r.not_before)
                 if t > r.latest_pu:
                     return None
                 load += r.pax
@@ -97,7 +66,7 @@ class Dispatcher:
                     etas.append(t)
                 t += self.S.dwell_pickup_s
             else:
-                if t - pu[r.rid] > r.max_ride_s:
+                if t - pu[r.rid] > r.max_ride_s or t > r.latest_do:
                     return None
                 load -= r.pax
                 if etas is not None:
@@ -109,47 +78,14 @@ class Dispatcher:
                 return None
         return t, meters, pu
 
-    def best_insertion(self, v, req, now):
-        base = self.evaluate(v, v.route, now)
-        if base is None:  # shouldn't happen, but never make a bad route worse
-            return None
-        base_t = base[0]
-        R = v.route
-        L = len(R)
-        positions = ([(i, j) for i in range(L + 1) for j in range(i, L + 1)]
-                     if self.P.pooling else [(L, L)])
-        P, D = Stop(req, "P"), Stop(req, "D")
-        best = None
-        for i, j in positions:
-            cand = R[:i] + [P] + R[i:j] + [D] + R[j:]
-            ev = self.evaluate(v, cand, now)
-            if ev is None:
-                continue
-            end_t, _, pu = ev
-            cost = (end_t - base_t) + self.P.wait_weight * (pu[req.rid] - req.t_req)
-            if best is None or cost < best[0]:
-                best = (cost, cand, pu)
-        self._positions += len(positions)
-        return best
-
-    def screen(self, fleet, node, now):
-        """Pre-screen: rank vans by road-network ETA to `node` (OSRM drive time from where the
-        van is next free), keep the closest screen_k for the full insertion search."""
-        avail = [v for v in fleet if v.charging_until <= now]
-        def eta(v):
-            anchor = v.route[-1].node if (v.route and not self.P.pooling) else v.node
-            return max(v.avail_t - now, 0) + self.tt_mat[anchor, node]
-        avail.sort(key=eta)
-        return avail[:self.P.screen_k], [(v.vid, round(eta(v))) for v in avail]
-
     def snapshot(self, v, now):
         etas = []
         self.evaluate(v, v.route, now, etas)
         self.snapshots.append((now, v.vid, [(s.node, s.kind, s.req.rid, round(e))
                                             for s, e in zip(v.route, etas)]))
 
-    # ---- assignment ----------------------------------------------------
-    def _set_leg(self, req, o, d, earliest, walk=0.0):
+    # ---- levers ----------------------------------------------------------
+    def set_leg(self, req, o, d, earliest, walk=0.0):
         req.pu_node, req.do_node = o, d
         req.earliest_pu = earliest
         req.latest_pu = req.t_req + self.P.max_wait_s + walk
@@ -159,7 +95,7 @@ class Dispatcher:
     def plan_new(self, req):
         """First time a request is seen: fill in direct time and (lever 3) a bus plan."""
         req.direct_s = self.tt_mat[req.o, req.d]
-        self._set_leg(req, req.o, req.d, req.t_req)
+        self.set_leg(req, req.o, req.d, req.t_req)
         if (self.P.bus_handoffs and self.transit and not req.accessible
                 and req.u_bus < self.P.bus_opt_in):
             plan = self.transit.plan(req, self.net, self.tt, self.P)
@@ -167,46 +103,33 @@ class Dispatcher:
                 req.bus_plan = plan
                 req.mode = plan["kind"]
                 if plan["kind"] == "van+bus":
-                    self._set_leg(req, plan["van_o"], plan["van_d"], req.t_req)
+                    self.set_leg(req, plan["van_o"], plan["van_d"], req.t_req)
+                    # never leave a rider at the stop after the last bus (Simulator._finish
+                    # boards the first bus at least 30 s after drop-off)
+                    req.latest_do = plan["route"].last_departure(plan["k1"]) - 30
                 else:
-                    self._set_leg(req, plan["van_o"], plan["van_d"], plan["bus_arrival"])
+                    self.set_leg(req, plan["van_o"], plan["van_d"], plan["bus_arrival"])
                     req.walk_s = plan["walk_start"]
 
     def revert_to_direct(self, req):
-        req.bus_plan, req.mode, req.walk_s = None, "van", 0.0
-        self._set_leg(req, req.o, req.d, req.t_req)
+        req.bus_plan, req.mode, req.walk_s, req.latest_do = None, "van", 0.0, float("inf")
+        self.set_leg(req, req.o, req.d, req.t_req)
 
-    def assign(self, req, fleet, now):
+    def pickup_options(self, req):
+        """(pickup node, walk seconds) choices: the rider's own spot, plus (lever 2) up to
+        walk_candidates approved points for riders who opt in."""
         options = [(req.pu_node, 0.0)]
         if (self.P.walk_points and req.mode == "van" and not req.accessible
                 and req.u_walk < self.P.walk_opt_in):
             options += [(int(c), self.net.walk_s(req.o, c)) for c in self.walk_cands[req.o]]
+        return options
 
-        best = None
-        self._positions = 0
-        per_van = {}
-        orig = (req.pu_node, req.earliest_pu, req.latest_pu, req.max_ride_s)
-        screened = None
-        for node, walk in options:
-            if walk > 0:
-                self._set_leg(req, node, req.do_node, req.t_req + walk, walk)
-            vans, ranking = self.screen(fleet, node, now)
-            if screened is None:
-                screened = ranking
-            for v in vans:
-                ins = self.best_insertion(v, req, now)
-                if ins is None:
-                    continue
-                cost = ins[0] + self.P.walk_weight * walk
-                if v.vid not in per_van or cost < per_van[v.vid]:
-                    per_van[v.vid] = cost
-                if best is None or cost < best[0]:
-                    best = (cost, v, ins[1], ins[2], node, walk)
-            req.pu_node, req.earliest_pu, req.latest_pu, req.max_ride_s = orig
-
-        log = dict(t=now, rid=req.rid, o=req.o, d=req.d, pax=req.pax, mode=req.mode,
-                   options=len(options), screened=screened or [], positions=self._positions,
-                   costs=sorted(per_van.items(), key=lambda kv: kv[1])[:3])
+    # ---- assignment ----------------------------------------------------
+    def assign(self, req, fleet, now):
+        options = self.pickup_options(req)
+        best, trace = self.engine.search(req, options, fleet, now)
+        log: dict = dict(t=now, rid=req.rid, o=req.o, d=req.d, pax=req.pax, mode=req.mode,
+                         options=len(options), **trace)
         if best is None:
             if not getattr(req, "_queued_logged", False):  # log the first miss only
                 req._queued_logged = True
@@ -216,7 +139,7 @@ class Dispatcher:
 
         cost, v, route, pu, node, walk = best
         if walk > 0:
-            self._set_leg(req, node, req.do_node, req.t_req + walk, walk)
+            self.set_leg(req, node, req.do_node, req.t_req + walk, walk)
             req.mode, req.walk_s = "walk+van", walk
         v.route = route
         v.avail_t = max(v.avail_t, now)
@@ -224,6 +147,7 @@ class Dispatcher:
         req.promised_pu = pu[req.rid]
         # the guarantee: once quoted, this pickup can't slip more than pickup_slip_s
         req.latest_pu = min(req.latest_pu, req.promised_pu + self.P.pickup_slip_s)
+        self.engine.committed(req)
         log.update(result="assigned", vid=v.vid, pu_node=node, walk=round(walk),
                    walk_rank=(self.walk_cands[req.o].index(node) + 1 if walk > 0 else 0),
                    promised=round(req.promised_pu), cost=round(cost), mode=req.mode)
@@ -237,6 +161,8 @@ class Simulator:
         self.net, self.P, self.F, self.S = net, policy, fleet_cfg, sim_cfg
         self.reqs = sorted(requests, key=lambda r: r.t_req)
         self.depot = int(net.nearest_node(*sim_cfg.depot)[0])
+        if not policy.buses:  # no Penn Bus: nothing to hand riders off to
+            transit = None
         self.disp = Dispatcher(net, policy, fleet_cfg, sim_cfg, self.depot, transit, density)
         start = sim_cfg.service_start_s
         self.fleet = ([Vehicle(k, True, fleet_cfg.ev_capacity, self.depot, start,
@@ -275,13 +201,13 @@ class Simulator:
                 lead = self.disp.tt(v.node, s.node)
                 depart = v.avail_t
                 if s.kind == "P":  # wait in place rather than at the curb if pickup is far off
-                    depart = max(depart, r.earliest_pu - lead)
+                    depart = max(depart, max(r.earliest_pu, r.not_before) - lead)
                 if depart > now:
                     return
                 v.route.pop(0)
                 arr = depart + self._drive(v, s.node, v.load, depart)
                 if s.kind == "P":
-                    start = max(arr, r.earliest_pu)
+                    start = max(arr, r.earliest_pu, r.not_before)
                     if v.onboard:
                         r.shared = True
                         for o in v.onboard.values():
@@ -326,6 +252,7 @@ class Simulator:
         t = S.service_start_s
         idx, pending = 0, []
         while True:
+            arrived = idx
             while idx < len(self.reqs) and self.reqs[idx].t_req <= t:
                 r = self.reqs[idx]
                 self.disp.plan_new(r)
@@ -345,6 +272,9 @@ class Simulator:
                     r.status = "unserved"
                 else:
                     still.append(r)
+            if idx > arrived:  # new request(s) this tick: let the engine react
+                placed = self.disp.engine.new_requests(self.fleet, t, still)
+                still = [r for r in still if r not in placed]
             pending = still
             done = (idx == len(self.reqs) and not pending
                     and all(not v.route for v in self.fleet))

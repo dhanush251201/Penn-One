@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import dijkstra
+from scipy.sparse.csgraph import connected_components, dijkstra
 from scipy.spatial import cKDTree
 
 from .geo import haversine_m
@@ -58,7 +58,9 @@ class StreetGraph:
                     and (not private or tg.get("foot") in ("yes", "designated"))):
                 walk.append((a, b, seg))
                 walk.append((b, a, seg))
-            if hw in DRIVE_SPEED and not private and tg.get("service") not in ("parking_aisle", "driveway"):
+            # like OSRM's car profile (which snapped the network nodes): parking aisles and
+            # driveways are drivable, private roads are not
+            if hw in DRIVE_SPEED and not private:
                 ow = tg.get("oneway", "no")
                 cost = seg / DRIVE_SPEED[hw]
                 if ow == "-1":
@@ -70,7 +72,13 @@ class StreetGraph:
         self.drive_g = self._csr(drive_cost, n)
         self.drive_len_g = self._csr(drive_len, n)
         self.walk_nodes = np.unique(np.concatenate([w[0] for w in walk] + [w[1] for w in walk]))
-        self.drive_nodes = np.unique(np.concatenate([d[0] for d in drive_len] + [d[1] for d in drive_len]))
+        # Snap drives only onto the largest strongly connected part of the (one-way aware)
+        # graph, so every pair of snapped points has a route; islands such as a one-way stub
+        # or a road cut off by a private gate would otherwise force a straight-line leg.
+        _, comp = connected_components(self.drive_g, directed=True, connection="strong")
+        main = np.bincount(comp).argmax()
+        drive_nodes = np.unique(np.concatenate([d[0] for d in drive_len] + [d[1] for d in drive_len]))
+        self.drive_nodes = drive_nodes[comp[drive_nodes] == main]
         P = _xy(self.lat, self.lon)
         self.walk_tree = cKDTree(P[self.walk_nodes])
         self.drive_tree = cKDTree(P[self.drive_nodes])
@@ -142,7 +150,8 @@ def simplify(pts, tol_m):
             continue
         seg = P[b] - P[a]
         L = np.hypot(*seg) or 1e-9
-        d = np.abs(np.cross(seg, P[a + 1:b] - P[a])) / L
+        rel = P[a + 1:b] - P[a]
+        d = np.abs(seg[0] * rel[:, 1] - seg[1] * rel[:, 0]) / L  # 2D cross product
         k = int(d.argmax())
         if d[k] > tol_m:
             keep[a + 1 + k] = True

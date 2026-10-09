@@ -10,7 +10,7 @@
   --ink: #16202a; --muted: #566372; --faint: #8b97a4;
   --ev: #0d8576; --gas: #b86e0c; --on-ev: #ffffff; --on-gas: #ffffff;
   --rider: #7637b5; --late: #c42f28; --bus: #2b59c9; --approved: #3d8f5a;
-  --pick: #c2410c; --focus: #2b59c9;
+  --pick: #c2410c; --focus: #2b59c9; --outside: rgba(196, 47, 40, .13);
   --f-display: "Overpass", "Arial Narrow", system-ui, sans-serif;
   --f-mono: "Overpass Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
@@ -21,7 +21,7 @@
     --ink: #e4eaf0; --muted: #96a3b0; --faint: #66727f;
     --ev: #35c2ae; --gas: #eea43a; --on-ev: #062521; --on-gas: #2a1800;
     --rider: #b78cf2; --late: #f2665b; --bus: #7097f6; --approved: #6cc68a;
-    --pick: #fb8a4c; --focus: #7097f6; color-scheme: dark;
+    --pick: #fb8a4c; --focus: #7097f6; --outside: rgba(242, 102, 91, .14); color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
@@ -30,7 +30,7 @@
   --ink: #e4eaf0; --muted: #96a3b0; --faint: #66727f;
   --ev: #35c2ae; --gas: #eea43a; --on-ev: #062521; --on-gas: #2a1800;
   --rider: #b78cf2; --late: #f2665b; --bus: #7097f6; --approved: #6cc68a;
-  --pick: #fb8a4c; --focus: #7097f6; color-scheme: dark;
+  --pick: #fb8a4c; --focus: #7097f6; --outside: rgba(242, 102, 91, .14); color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { background: var(--bg); color: var(--ink); font-family: var(--f-display); font-size: 14px; line-height: 1.45; }
@@ -97,6 +97,7 @@ button { font: 600 13px/1 var(--f-display); color: var(--ink); }
 .feed .r small { display: block; color: var(--muted); }
 .pill { font: 600 10.5px/1 var(--f-mono); padding: 4px 6px; border-radius: 4px; border: 1px solid currentColor; white-space: nowrap; align-self: start; }
 .pill.walk { color: var(--approved); } .pill.bus { color: var(--bus); } .pill.door { color: var(--muted); } .pill.q { color: var(--late); }
+.pill.moved { color: var(--pick); }
 
 .fleet .rows { display: grid; }
 .lane { display: grid; grid-template-columns: 230px minmax(0, 1fr); border-top: 1px solid var(--line); }
@@ -163,7 +164,7 @@ footer p { margin: 0; }
 
   <div class="main">
     <section class="card">
-      <div class="hd"><h2>Live map</h2><span class="label">Buildings labeled · green squares are approved walk-to points, larger ones see more historical pickups</span></div>
+      <div class="hd"><h2>Live map</h2><span class="label">Buildings labeled · green squares are approved walk-to points, larger ones see more historical pickups · red tint is outside the on-demand van area</span></div>
       <div class="mapbox"><canvas id="mapbase"></canvas><canvas id="map" role="img" aria-label="Map of University City with vans, riders and labeled buildings"></canvas></div>
       <div class="bchips" id="bchips" role="group" aria-label="Pick a building"></div>
       <div class="binfo" id="binfo" aria-live="polite"></div>
@@ -185,7 +186,7 @@ footer p { margin: 0; }
   </section>
 
   <footer>
-    <p><strong>How the optimizer works.</strong> Every 30 seconds each waiting request goes through the five steps above. All distances follow physical routes. Walking is the shortest path over OpenStreetMap sidewalks, footpaths, crosswalks and steps, so a 2-minute limit (about 156 m at 1.3 m/s) never cuts through a building, the rail yards or the river. Van screening and insertion use OSRM drive times over the real road network, one-way streets included. Walk-to points are ranked by how many pickups happened near them over 30 past evenings. The screen keeps the 4 vans with the shortest road ETA for the full insertion search.</p>
+    <p><strong>How the optimizer works.</strong> Every 30 seconds each waiting request goes through the five steps above. With the re-optimizing engine, whenever new requests arrive the dispatcher then re-plans every rider still waiting for pickup across the whole fleet: riders on board keep their van, a rider is locked once their van is 3 minutes away, nobody changes van more than once, and every quoted pickup still holds. Those changes appear in the log as <em>re-planned</em>. All distances follow physical routes. Walking is the shortest path over OpenStreetMap sidewalks, footpaths, crosswalks and steps, so a 2-minute limit (about 156 m at 1.3 m/s) never cuts through a building, the rail yards or the river. Van screening and insertion use OSRM drive times over the real road network, one-way streets included. Walk-to points are ranked by how many pickups happened near them over 30 past evenings. The screen keeps the 4 vans with the shortest road ETA for the full insertion search.</p>
     <p>Demand is synthetic: 300 requests on one generated evening, with history built from 30 more. Fleet: 5 electric vans with 6 seats and 1 gas van with 8 seats. Drive times come from OSRM, map data © OpenStreetMap contributors, and building positions are approximate. Vans, buses and walking riders are drawn along their actual street and sidewalk routes.</p>
   </footer>
 </div>
@@ -195,7 +196,10 @@ footer p { margin: 0; }
 (() => {
 const D = JSON.parse(document.getElementById('data').textContent);
 const [S0, W0] = D.bbox;
-const VIEW = { S: 39.9405, N: 39.9625, W: -75.2165, E: -75.1775 };
+// map view: the van service area plus a little margin (older data without it: campus core)
+const VIEW = (() => { if (!D.area) return { S: 39.9405, N: 39.9625, W: -75.2165, E: -75.1775 };
+  const la = D.area.map(p => S0 + p[1] / 1e5), lo = D.area.map(p => W0 + p[0] / 1e5), m = 0.0012;
+  return { S: Math.min(...la) - m, N: Math.max(...la) + m, W: Math.min(...lo) - m, E: Math.max(...lo) + m }; })();
 const COS = Math.cos(39.95 * Math.PI / 180);
 const VWU = (VIEW.E - VIEW.W) * 1e5 * COS, VHU = (VIEW.N - VIEW.S) * 1e5;
 const NODES = D.nodes, T0 = D.start, T1 = D.end;
@@ -220,7 +224,7 @@ const ABBR = { 'Van Pelt Library': 'VAN PELT', 'Huntsman Hall': 'HUNTSMAN', 'Tow
 
 let C = {};
 function readColors() { const cs = getComputedStyle(document.documentElement);
-  for (const k of ['map','street','street-major','ink','muted','faint','ev','gas','on-ev','on-gas','rider','late','bus','approved','panel','pick','line'])
+  for (const k of ['map','street','street-major','ink','muted','faint','ev','gas','on-ev','on-gas','rider','late','bus','approved','panel','pick','line','outside'])
     C[k] = cs.getPropertyValue('--' + k).trim();
   C.fd = cs.getPropertyValue('--f-display'); C.fm = cs.getPropertyValue('--f-mono'); }
 
@@ -276,9 +280,12 @@ function kpis(t) {
   set('req', req); set('wait', waiting); set('avg', wn ? (ws / wn / 60).toFixed(1) : '0.0');
   set('mi', mi.toFixed(0)); set('dead', mi ? (100 * dm / mi).toFixed(0) + '%' : '0%'); set('walk', walk); set('bus', bus);
 }
-const K = D.kpis.all_levers || Object.values(D.kpis).at(-1), KB = D.kpis.baseline;
+const SC = D.scenario || { name: 'all_levers', engine: 'greedy', walk_points: true, bus_handoffs: true };
+const K = D.kpis[SC.name] || Object.values(D.kpis).at(-1), KB = D.kpis.baseline;
+const levers = [SC.engine === 'direct' ? 'no pooling' : 'pooling', SC.engine === 'reopt' ? 're-optimization on every new request' : null,
+  SC.walk_points ? 'walk-to points' : null, SC.bus_handoffs ? 'bus handoffs' : null].filter(Boolean);
 document.getElementById('sub').textContent =
-  `Synthetic evening #${D.demand.night} · ${D.demand.requests} requests · 6 vans: E1–E5 electric (6 seats), G1 gas (8 seats) · pooling, walk-to points and bus handoffs all on`;
+  `Synthetic evening #${D.demand.night} · ${D.demand.requests} requests · 6 vans: E1–E5 electric (6 seats), G1 gas (8 seats) · engine: ${SC.engine} · ${levers.join(', ')}`;
 
 // ---- map ------------------------------------------------------------------------
 const mapCv = document.getElementById('map'), baseCv = document.getElementById('mapbase');
@@ -297,6 +304,13 @@ function drawBase() {
   for (const rank of [1, 2, 3]) { c.strokeStyle = rank === 1 ? C.street : C['street-major']; c.lineWidth = [0, 0.9, 1.8, 2.8][rank]; c.beginPath();
     for (const st of D.streets) { if (st[0] !== rank) continue; for (let i = 1; i < st.length; i += 2) { const [x, y] = xy([st[i], st[i + 1]]); i === 1 ? c.moveTo(x, y) : c.lineTo(x, y); } }
     c.stroke(); }
+  // van service boundary: red tint outside it (even-odd fill of canvas minus the area), dashed edge
+  if (D.area) {
+    const ring = () => D.area.forEach((p, i) => { const [x, y] = xy(p); i ? c.lineTo(x, y) : c.moveTo(x, y); });
+    c.beginPath(); c.rect(0, 0, M.w, M.h); ring(); c.closePath(); c.fillStyle = C.outside; c.fill('evenodd');
+    c.strokeStyle = C.ink; c.globalAlpha = .45; c.lineWidth = 1.5; c.setLineDash([3, 4]);
+    c.beginPath(); ring(); c.closePath(); c.stroke(); c.setLineDash([]); c.globalAlpha = 1;
+  }
   c.strokeStyle = C.bus; c.globalAlpha = 0.3; c.lineWidth = 3; c.setLineDash([6, 5]);
   for (const R of D.bus) for (const pi of R.paths) strokePartial(c, xy, pi, 1);
   c.setLineDash([]); c.globalAlpha = 1;
@@ -359,7 +373,7 @@ function drawMap(t) {
   }
   // latest decision: link chosen van to its pickup
   const d = latestDecision(t);
-  if (d && d.result === 'assigned' && t - d.t < 150) {
+  if (d && ['assigned', 'moved', 'placed'].includes(d.result) && t - d.t < 150) {
     const v = vans.find(v => v.label === d.vid), st = vanState(v, t); const rr = byRid.get(d.rid);
     if (rr) { const [px, py] = xy(NODES[rr.pu]), [vx, vy] = xy(st.p);
       c.strokeStyle = C.pick; c.lineWidth = 2;
@@ -403,7 +417,9 @@ function renderInfo() {
 // ---- optimizer pipeline + feed -----------------------------------------------
 const pipe = document.getElementById('pipe'), feed = document.getElementById('feed');
 let lastDecIdx = -2;
-function pillFor(d) { if (d.result !== 'assigned') return '<span class="pill q">queued</span>';
+function pillFor(d) { if (d.result === 'moved') return '<span class="pill moved">re-planned</span>';
+  if (d.result === 'placed') return '<span class="pill moved">placed</span>';
+  if (d.result !== 'assigned') return '<span class="pill q">queued</span>';
   if (d.mode === 'walk+van') return '<span class="pill walk">walk-to</span>';
   if (d.mode.includes('bus')) return `<span class="pill bus">${d.mode}</span>`; return '<span class="pill door">door</span>'; }
 function renderPipeline(t) {
@@ -411,6 +427,27 @@ function renderPipeline(t) {
   document.getElementById('feedcount').textContent = `${i + 1} decisions so far`;
   if (i < 0) { pipe.innerHTML = '<li><div><div class="t">Waiting for the first request</div><div class="d">Service starts at 6:00 PM.</div></div></li>'; feed.innerHTML = ''; return; }
   const d = D.decisions[i], P = D.policy;
+  pipe.innerHTML = d.result === 'moved' || d.result === 'placed' ? replanSteps(d, P) : assignSteps(d, P);
+  const note = d => d.result === 'moved' ? `${d.from_vid} → ${d.vid} · pickup ${fmt(d.eta)}, quote kept`
+    : d.result === 'placed' ? `${d.vid} · pickup ${fmt(d.promised)}` : d.result === 'assigned' ? `${d.vid} · pickup ${fmt(d.promised)}` : 'retrying';
+  const from = Math.max(0, i - 24);
+  feed.innerHTML = D.decisions.slice(from, i + 1).reverse().map(d => `<li><time>${fmt(d.t).replace(' ', '')}</time>
+    <div class="r">#${d.rid} ${esc(d.from)} → ${esc(d.to)}<small>${note(d)}${d.walk ? ` · walks ${d.walk_m} m` : ''}</small></div>${pillFor(d)}</li>`).join('');
+}
+
+// a re-plan by the re-optimizing engine: one entry per rider it moved or finally placed
+function replanSteps(d, P) {
+  const saved = d.saving != null ? `Fleet-wide cost fell by ${(d.saving / 60).toFixed(1)} min` : 'A queued request could finally be placed';
+  return `
+    <li><div><div class="t">Re-plan at ${fmtS(d.t)}</div><div class="d">New requests arrived, so the dispatcher re-planned the ${d.pool} rider${d.pool === 1 ? '' : 's'} still waiting for pickup across every van. Riders on board keep their van; riders whose van is within ${P.reopt_freeze_s / 60} min are locked.</div></div></li>
+    <li><div><div class="t">Search</div><div class="d">Rebuilt the plan placing first the rider with the most to lose, then tried moving single riders and swapping pairs between vans. Every candidate plan is checked against drive times, seats, ride-time caps, EV range and each rider's quoted pickup.</div></div></li>
+    <li><div><div class="t">Kept the new plan</div><div class="d">${saved}; ${d.moved} rider${d.moved === 1 ? '' : 's'} changed van. A new plan is only kept if it beats the current one.</div></div></li>
+    <li><div><div class="t">${d.result === 'moved' ? `#${d.rid} moved from ${d.from_vid} to ${d.vid}` : `#${d.rid} placed on ${d.vid}`}</div><div class="d">${esc(d.from)} → ${esc(d.to)}. ${d.result === 'moved'
+      ? `Pickup now planned for ${fmt(d.eta)}. The quoted ${fmt(d.promised)} still holds: no earlier than ${fmt(d.promised - P.reopt_early_s)}, no later than ${fmt(d.promised + P.pickup_slip_s)}. A rider changes van at most ${P.reopt_max_switches === 1 ? 'once' : P.reopt_max_switches + ' times'}.`
+      : `It had been waiting in the queue. Pickup quoted for ${fmt(d.promised)}, guaranteed no later than ${fmt(d.promised + P.pickup_slip_s)}.`}</div></div></li>`;
+}
+
+function assignSteps(d, P) {
   const cands = d.options - 1;
   const walkLine = d.walk ? `Rider opted in. Tried ${cands} approved point${cands === 1 ? '' : 's'} within ${P.walk_max_s / 60} min, ranked by historical pickups. Chose rank #${d.walk_rank}: ${esc(d.walk_to)}, ${d.walk_m} m on foot (${(d.walk / 60).toFixed(1)} min).`
     : d.mode.includes('bus') ? `Handoff planned: ${d.mode === 'bus+van' ? 'bus first, then a van for the last leg' : 'van to the bus stop, then the bus'}. Walk-to points are not used with bus trips.`
@@ -419,15 +456,12 @@ function renderPipeline(t) {
   const maxEta = Math.max(...d.screened.map(s => s[1]), 1);
   const bars = d.screened.map(([lab, eta], k) => `<div class="bar ${k < P.screen_k ? 'keep' : ''} ${lab === d.vid ? 'win' : ''}"><b>${lab}</b><i style="width:${Math.max(4, 100 * eta / maxEta)}%"></i><span>${(eta / 60).toFixed(1)} min</span></div>`).join('');
   const costs = d.costs.map(([lab, c]) => `${lab} ${(c / 60).toFixed(1)}`).join(' · ');
-  pipe.innerHTML = `
+  return `
     <li><div><div class="t">Request #${d.rid} at ${fmtS(d.t)}</div><div class="d">${esc(d.from)} → ${esc(d.to)} · ${d.pax} rider${d.pax > 1 ? 's' : ''}</div></div></li>
     <li><div><div class="t">Walk-to point</div><div class="d">${walkLine}</div></div></li>
     <li><div><div class="t">Road-ETA screen · kept ${Math.min(P.screen_k, d.screened.length)} of ${d.screened.length} vans</div><div class="d">Vans ranked by OSRM drive time over the real road network to the pickup, plus time to finish their current stop.</div><div class="bars">${bars}</div></div></li>
     <li><div><div class="t">Exact insertion · ${d.positions} positions tested</div><div class="d">Every pickup/drop-off slot in each kept van's route, checked against OSRM drive times, seat count, ride-time caps, the ${P.pickup_slip_s / 60}-min pickup guarantee for riders already booked, and EV range. Best costs (min): ${costs || 'none feasible'}.</div></div></li>
     <li><div><div class="t">${d.result === 'assigned' ? `Assigned to ${d.vid}` : 'No feasible van, so the request stays queued'}</div><div class="d">${d.result === 'assigned' ? `Pickup quoted for ${fmt(d.promised)}. Guaranteed no later than ${fmt(d.promised + P.pickup_slip_s)}.` : 'The request is retried every 30 s until a van can reach it within 30 min.'}</div></div></li>`;
-  const from = Math.max(0, i - 24);
-  feed.innerHTML = D.decisions.slice(from, i + 1).reverse().map(d => `<li><time>${fmt(d.t).replace(' ', '')}</time>
-    <div class="r">#${d.rid} ${esc(d.from)} → ${esc(d.to)}<small>${d.result === 'assigned' ? `${d.vid} · pickup ${fmt(d.promised)}` : 'retrying'}${d.walk ? ` · walks ${d.walk_m} m` : ''}</small></div>${pillFor(d)}</li>`).join('');
 }
 
 // ---- fleet schedule ----------------------------------------------------------
@@ -485,8 +519,8 @@ function drawLane(v, t) {
     : nextStop ? `${nextStop[1] === 'P' ? 'Pickup' : 'Drop-off'} #${nextStop[2]} at ${placeOf(nextStop[0])}` : `Idle near ${placeOf(st.node)}`;
 }
 document.getElementById('fleetnote').innerHTML =
-  `<span>Full evening with the levers: <b>${Math.round(K.vehicle_miles)} van miles</b>, ${K.deadhead_pct.toFixed(0)}% empty, ${K.wait_mean_min.toFixed(1)} min average wait, ${K.served_pct.toFixed(0)}% served</span>` +
-  (KB ? `<span>Without them (one party per van): <b>${Math.round(KB.vehicle_miles)} mi</b>, ${KB.wait_mean_min.toFixed(1)} min wait, ${KB.served_pct.toFixed(0)}% served</span>` : '') +
+  `<span>Full evening with this dispatch: <b>${Math.round(K.vehicle_miles)} van miles</b>, ${K.deadhead_pct.toFixed(0)}% empty, ${K.wait_mean_min.toFixed(1)} min average wait, ${K.served_pct.toFixed(0)}% served${K.reopt_improved ? `, ${K.reopt_improved} re-plans moved ${K.van_changes} riders` : ''}</span>` +
+  (KB ? `<span>No optimization (one party per van): <b>${Math.round(KB.vehicle_miles)} mi</b>, ${KB.wait_mean_min.toFixed(1)} min wait, ${KB.served_pct.toFixed(0)}% served</span>` : '') +
   `<span><svg width="12" height="10" aria-hidden="true"><path d="M6 0 L12 10 L0 10Z" fill="var(--rider)"/></svg> pickup &nbsp;<svg width="12" height="10" aria-hidden="true"><path d="M0 0 L12 0 L6 10Z" fill="none" stroke="var(--ink)" stroke-width="1.5"/></svg> drop-off</span>`;
 
 // ---- timeline + loop -----------------------------------------------------------

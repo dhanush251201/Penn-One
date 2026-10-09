@@ -1,6 +1,7 @@
 """Export one evening of dispatcher internals for the operator console.
 
     python3 -m penn_twin.export_ops && python3 -m penn_twin.build_page ops
+    python3 -m penn_twin.export_ops --scenario all_levers   # another scenario
 """
 import argparse
 import json
@@ -11,7 +12,7 @@ import numpy as np
 from .config import FleetConfig, SimConfig, scenario
 from .demand import synthesize, to_requests
 from .export_viz import PathBank, bus_json, q, streets
-from .geo import BBOX, BUILDINGS, M_PER_MILE
+from .geo import BBOX, BUILDINGS, M_PER_MILE, SERVICE_AREA
 from .history import peak_hour, pickup_density
 from .metrics import summarize
 from .network import Network
@@ -23,7 +24,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--night", type=int, default=0)
     ap.add_argument("--trips-per-night", type=int, default=300)
-    ap.add_argument("--scenario", default="all_levers")
+    ap.add_argument("--scenario", default="pool+reopt")
     ap.add_argument("--out", default="viz/ops_data.json")
     args = ap.parse_args(argv)
 
@@ -108,6 +109,19 @@ def main(argv=None):
             "walk_m": round(float(net.walk_m[d["o"], d["pu_node"]])) if d.get("walk") else 0,
             "promised": d.get("promised"),
         })
+    # re-optimization: riders moved to another van, queued riders finally placed
+    byrid = {r.rid: r for r in sim.reqs}
+    for m in disp.moves:
+        r = byrid[m["rid"]]
+        decisions.append({
+            "t": m["t"], "rid": m["rid"], "pax": r.pax, "mode": r.mode,
+            "from": place(r.o), "to": place(r.d),
+            "result": "placed" if m["from_vid"] is None else "moved",
+            "vid": vlabel[m["to_vid"]], "from_vid": vlabel.get(m["from_vid"]),
+            "eta": m["eta"], "promised": round(r.promised_pu),
+            "pool": m["pool"], "moved": m["moved"], "saving": m["saving"],
+        })
+    decisions.sort(key=lambda d: d["t"])  # stable: a tick's assignments stay before its re-plan
 
     snaps = [[t, vlabel[vid], [[n, k, rid, eta] for n, k, rid, eta in stops]]
              for t, vid, stops in disp.snapshots]
@@ -117,12 +131,17 @@ def main(argv=None):
         "approved": [[int(i), round(float(density[i]), 1)] for i in net.approved.nonzero()[0]],
         "depot": sim.depot, "start": simcfg.service_start_s, "end": simcfg.service_end_s,
         "streets": streets(),
-        "bus": bus_json(transit, bank),
+        "bus": bus_json(transit, bank) if sim.P.buses else [],
         "names": list(net.names), "buildings": buildings, "vans": vans, "riders": riders,
         "decisions": decisions, "snapshots": snaps,
         "battery_kwh": fleet.battery_kwh,
+        "area": [q(la, lo) for la, lo in SERVICE_AREA],
+        "scenario": {"name": args.scenario, "engine": disp.engine.name, "label": disp.engine.label,
+                     "walk_points": sim.P.walk_points, "bus_handoffs": sim.P.bus_handoffs,
+                     "buses": sim.P.buses},
         "policy": {k: getattr(sim.P, k) for k in ("screen_k", "walk_max_s", "walk_candidates",
-                                                    "pickup_slip_s", "max_wait_s")},
+                                                    "pickup_slip_s", "max_wait_s", "reopt_freeze_s",
+                                                    "reopt_early_s", "reopt_max_switches")},
         "kpis": {n: {k: (None if v != v else round(float(v), 2)) for k, v in summarize(s).items()}
                  for n, s in sims.items()},
         "demand": {"night": args.night, "requests": len(df)},
